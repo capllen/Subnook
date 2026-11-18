@@ -1,6 +1,7 @@
 package com.subnook.app.domain
 
 import com.subnook.app.data.PaymentRecord
+import com.subnook.app.data.PayMethod
 import com.subnook.app.data.SettingsRepository
 import com.subnook.app.data.Subscription
 import com.subnook.app.data.SubscriptionDao
@@ -39,12 +40,21 @@ class RenewalProcessor(
     private suspend fun rollAutoRenew(sub: Subscription, today: LocalDate): Subscription {
         if (!sub.autoRenew) return sub
         var next = LocalDate.ofEpochDay(sub.nextBillingDay)
+        var balance = sub.balance
         var guard = 0
         while (next < today && guard++ < 1000) {
-            dao.insertPayment(PaymentRecord(subscriptionId = sub.id, billingDay = next.toEpochDay(), amount = sub.amount, currency = sub.currency, auto = true))
+            val used = balanceUsed(sub, balance)
+            dao.insertPayment(
+                PaymentRecord(
+                    subscriptionId = sub.id, billingDay = next.toEpochDay(), amount = sub.amount,
+                    currency = sub.currency, auto = true, balanceUsed = used,
+                ),
+            )
+            balance = (balance - used).coerceAtLeast(0.0)
             next = Billing.next(sub, next)
         }
-        return if (next.toEpochDay() == sub.nextBillingDay) sub else sub.copy(nextBillingDay = next.toEpochDay())
+        return if (next.toEpochDay() == sub.nextBillingDay) sub
+        else sub.copy(nextBillingDay = next.toEpochDay(), balance = balance)
     }
 
     private fun remind(sub: Subscription, today: LocalDate, timeReached: Boolean): Subscription {
@@ -75,9 +85,20 @@ class RenewalProcessor(
     /** 用户确认手动付款：记账并推进一个周期 */
     suspend fun confirmPaid(id: Long) = mutex.withLock {
         val sub = dao.get(id) ?: return@withLock
-        dao.insertPayment(PaymentRecord(subscriptionId = sub.id, billingDay = sub.nextBillingDay, amount = sub.amount, currency = sub.currency, auto = false))
+        val used = balanceUsed(sub)
+        dao.insertPayment(
+            PaymentRecord(
+                subscriptionId = sub.id, billingDay = sub.nextBillingDay, amount = sub.amount,
+                currency = sub.currency, auto = false, balanceUsed = used,
+            ),
+        )
         val next = Billing.next(sub)
-        dao.upsert(sub.copy(nextBillingDay = next.toEpochDay(), overdueNotifiedDay = null))
+        dao.upsert(
+            sub.copy(
+                nextBillingDay = next.toEpochDay(), overdueNotifiedDay = null,
+                balance = (sub.balance - used).coerceAtLeast(0.0),
+            ),
+        )
         notifier.cancel(sub.id)
     }
 
@@ -87,4 +108,8 @@ class RenewalProcessor(
         dao.upsert(sub.copy(nextBillingDay = Billing.next(sub).toEpochDay(), overdueNotifiedDay = null))
         notifier.cancel(sub.id)
     }
+
+    /** 余额付款最多扣到 0，不会把余额记成负数 */
+    private fun balanceUsed(sub: Subscription, balance: Double = sub.balance): Double =
+        if (sub.payMethod == PayMethod.BALANCE) minOf(balance, sub.amount).coerceAtLeast(0.0) else 0.0
 }

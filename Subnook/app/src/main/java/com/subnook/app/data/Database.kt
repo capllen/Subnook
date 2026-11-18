@@ -50,6 +50,15 @@ interface SubscriptionDao {
     @Delete
     suspend fun deletePayment(p: PaymentRecord)
 
+    /** 删除一条付款记录；如果当时从余额扣过款，把这部分加回余额 */
+    @Transaction
+    suspend fun deletePaymentWithRefund(p: PaymentRecord) {
+        deletePayment(p)
+        if (p.balanceUsed <= 0.0) return
+        val sub = get(p.subscriptionId) ?: return
+        upsert(sub.copy(balance = sub.balance + p.balanceUsed))
+    }
+
     @Query("SELECT * FROM payments WHERE subscriptionId = :subId ORDER BY billingDay DESC")
     fun observePayments(subId: Long): Flow<List<PaymentRecord>>
 
@@ -82,20 +91,28 @@ interface SubscriptionDao {
     }
 }
 
-@Database(entities = [Subscription::class, PaymentRecord::class], version = 2, exportSchema = false)
+@Database(entities = [Subscription::class, PaymentRecord::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): SubscriptionDao
 
     companion object {
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "subnook.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
 
         /** v2：新增手动排序位置 */
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE subscriptions ADD COLUMN sortIndex INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v3：余额付款 */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE subscriptions ADD COLUMN balance REAL NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE payments ADD COLUMN balanceUsed REAL NOT NULL DEFAULT 0")
             }
         }
     }

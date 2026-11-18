@@ -22,6 +22,7 @@ enum class PayMethod(val label: String, val defaultAuto: Boolean) {
     CREDIT_CARD("信用卡", true),
     PAYPAL("PayPal", true),
     BANK_CARD("银行卡", true),
+    BALANCE("余额", true),
     MANUAL("手动付款", false),
     OTHER("其他", false),
 }
@@ -77,6 +78,8 @@ data class Subscription(
     val createdAt: Long = System.currentTimeMillis(),
     /** 手动排序的位置，越小越靠前（DB v2 新增） */
     @ColumnInfo(defaultValue = "0") val sortIndex: Int = 0,
+    /** 余额付款的剩余余额，币种与订阅金额相同（DB v3 新增） */
+    @ColumnInfo(defaultValue = "0") val balance: Double = 0.0,
 )
 
 @Serializable
@@ -100,6 +103,8 @@ data class PaymentRecord(
     /** true=自动续费自动记账，false=手动确认 */
     val auto: Boolean,
     val recordedAt: Long = System.currentTimeMillis(),
+    /** 这笔付款从订阅余额里扣掉的钱；0 表示不是余额付款（DB v3 新增） */
+    @ColumnInfo(defaultValue = "0") val balanceUsed: Double = 0.0,
 )
 
 data class Preset(

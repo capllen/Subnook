@@ -81,10 +81,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.subnook.app.data.Currencies
+import com.subnook.app.data.PayMethod
 import com.subnook.app.data.SortOrder
 import com.subnook.app.data.Subscription
 import com.subnook.app.data.SummaryPeriod
 import com.subnook.app.domain.Billing
+import com.subnook.app.domain.Balance
 import com.subnook.app.ui.MainViewModel
 import com.subnook.app.ui.UiState
 import com.subnook.app.ui.components.CurrencyPickerDialog
@@ -573,6 +575,7 @@ private fun dueColor(days: Long): Color {
 private fun PendingCard(s: Subscription, today: LocalDate, onPaid: () -> Unit, onSkip: () -> Unit, onClick: () -> Unit) {
     val extra = LocalExtra.current
     val days = Billing.daysUntil(s, today)
+    val forecast = if (s.payMethod == PayMethod.BALANCE) Balance.forecast(s) else null
     SoftCard(Modifier.fillMaxWidth().animateContentSize(), onClick = onClick) {
         Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             SubIcon(s.iconType, s.iconValue, s.color, s.name, size = 46.dp)
@@ -587,6 +590,10 @@ private fun PendingCard(s: Subscription, today: LocalDate, onPaid: () -> Unit, o
                         if (s.autoRenew) "自动" else "手动", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
                     )
+                    if (forecast != null && forecast.periods == 0) {
+                        Spacer(Modifier.width(6.dp))
+                        Pill("余额不足", extra.danger)
+                    }
                 }
             }
             AmountText(s.amount, s.currency)
@@ -620,10 +627,13 @@ private fun AmountText(amount: Double, currency: String) {
 
 @Composable
 private fun SubCard(s: Subscription, st: UiState, today: LocalDate, onClick: () -> Unit) {
+    val extra = LocalExtra.current
     val cur = st.settings.displayCurrency
     val days = Billing.daysUntil(s, today)
     val date = LocalDate.ofEpochDay(s.nextBillingDay)
     val dateFmt = if (date.year == today.year) "M月d日" else "yy年M月d日"
+    val forecast = if (s.payMethod == PayMethod.BALANCE) Balance.forecast(s) else null
+    val coverage = forecast?.takeIf { it.periods > 1 }?.let { " · 可用 ${Balance.periodsText(it)}" }.orEmpty()
     SoftCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
             SubIcon(s.iconType, s.iconValue, s.color, s.name, size = 48.dp)
@@ -639,19 +649,28 @@ private fun SubCard(s: Subscription, st: UiState, today: LocalDate, onClick: () 
                     Spacer(Modifier.width(4.dp))
                     Text(
                         date.format(DateTimeFormatter.ofPattern(dateFmt)) + " · " + when {
-                            s.payMethod == com.subnook.app.data.PayMethod.MANUAL -> "手动付款"
+                            s.payMethod == PayMethod.MANUAL -> "手动付款"
                             s.autoRenew -> s.payMethod.label
                             else -> "${s.payMethod.label} · 手动"
-                        },
+                        } + coverage,
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Spacer(Modifier.height(7.dp))
-                if (s.active) {
-                    Pill(Billing.dueText(days), dueColor(days))
-                } else {
-                    Pill("已停用", MaterialTheme.colorScheme.outline)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (s.active) {
+                        Pill(Billing.dueText(days), dueColor(days))
+                    } else {
+                        Pill("已停用", MaterialTheme.colorScheme.outline)
+                    }
+                    if (s.active && forecast != null && forecast.periods <= 1) {
+                        Spacer(Modifier.width(6.dp))
+                        Pill(
+                            if (forecast.periods == 0) "余额不足" else "仅够 1 期",
+                            if (forecast.periods == 0) extra.danger else extra.warning,
+                        )
+                    }
                 }
             }
             Spacer(Modifier.width(8.dp))
