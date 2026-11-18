@@ -59,6 +59,7 @@ import com.subnook.app.data.Currencies
 import com.subnook.app.data.PayMethod
 import com.subnook.app.data.Subscription
 import com.subnook.app.data.SummaryPeriod
+import com.subnook.app.domain.Balance
 import com.subnook.app.domain.Billing
 import com.subnook.app.ui.MainViewModel
 import com.subnook.app.ui.UiState
@@ -207,6 +208,47 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         StackBar(byMethod)
                         byMethod.forEach { s -> LegendRow(s, monthTotal, cur) }
+                    }
+                }
+            }
+
+            item {
+                val balanceSubs = active.filter { it.payMethod == PayMethod.BALANCE }
+                    .sortedBy { Balance.forecast(it)?.rechargeOn ?: LocalDate.MAX }
+                if (balanceSubs.isNotEmpty()) {
+                    val extra = LocalExtra.current
+                    Group("余额付款") {
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            balanceSubs.forEach { s ->
+                                val forecast = Balance.forecast(s)
+                                val low = forecast == null || forecast.periods == 0
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    SubIcon(s.iconType, s.iconValue, s.color, s.name, size = 32.dp)
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(s.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            if (forecast == null) "填写金额后计算"
+                                            else "余额 ${Currencies.formatList(s.balance, s.currency)} · 可用 ${Balance.periodsText(forecast)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (low) extra.danger else cs.onSurfaceVariant,
+                                        )
+                                    }
+                                    Text(
+                                        when {
+                                            forecast == null -> "—"
+                                            forecast.rechargeOn <= today -> "需要充值"
+                                            else -> "${Balance.dateText(forecast.rechargeOn, today)}前充值"
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (low) extra.danger else cs.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

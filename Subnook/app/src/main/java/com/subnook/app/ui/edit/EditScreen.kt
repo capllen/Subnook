@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Autorenew
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -84,6 +85,7 @@ import com.subnook.app.data.IconType
 import com.subnook.app.data.PayMethod
 import com.subnook.app.data.PresetCatalog
 import com.subnook.app.data.Subscription
+import com.subnook.app.domain.Balance
 import com.subnook.app.domain.Billing
 import com.subnook.app.ui.MainViewModel
 import com.subnook.app.ui.components.CurrencyPickerDialog
@@ -103,6 +105,7 @@ private class Form {
     var iconValue by mutableStateOf("")
     var color by mutableStateOf(PaletteColors[12])
     var amount by mutableStateOf("")
+    var balance by mutableStateOf("")
     var currency by mutableStateOf("CNY")
     var cycleCount by mutableStateOf("1")
     var cycleUnit by mutableStateOf(CycleUnit.MONTH)
@@ -122,6 +125,7 @@ private class Form {
         original = s
         name = s.name; iconType = s.iconType; iconValue = s.iconValue; color = s.color
         amount = s.amount.toBigDecimal().stripTrailingZeros().toPlainString(); currency = s.currency
+        balance = s.balance.toBigDecimal().stripTrailingZeros().toPlainString()
         cycleCount = s.cycleCount.toString(); cycleUnit = s.cycleUnit; next = LocalDate.ofEpochDay(s.nextBillingDay)
         payMethod = s.payMethod; autoRenew = s.autoRenew; category = s.category
         remind = s.remindEnabled; remindDays = s.remindDaysBefore; active = s.active; note = s.note; presetKey = s.presetKey
@@ -142,8 +146,15 @@ private class Form {
         category = p.category
     }
 
+    fun effectiveAnchorDay(): Int {
+        val o = original
+        val dateChanged = o == null || o.nextBillingDay != next.toEpochDay()
+        return if (o == null || dateChanged || o.cycleUnit != cycleUnit) next.dayOfMonth else o.anchorDay
+    }
+
     fun build(): Subscription? {
         val amt = amount.replace(",", "").toDoubleOrNull() ?: return null
+        val bal = balance.replace(",", "").toDoubleOrNull() ?: original?.balance ?: 0.0
         val cnt = cycleCount.toIntOrNull()?.takeIf { it in 1..999 } ?: return null
         if (name.isBlank()) return null
         val o = original
@@ -153,10 +164,11 @@ private class Form {
             name = name.trim(), iconType = iconType, iconValue = iconValue, color = color,
             amount = amt, currency = currency, cycleCount = cnt, cycleUnit = cycleUnit,
             nextBillingDay = next.toEpochDay(),
-            anchorDay = if (o == null || dateChanged || o.cycleUnit != cycleUnit) next.dayOfMonth else o.anchorDay,
+            anchorDay = effectiveAnchorDay(),
             payMethod = payMethod, autoRenew = autoRenew, category = category,
             remindEnabled = remind, remindDaysBefore = remindDays, active = active, note = note.trim(),
             presetKey = presetKey,
+            balance = bal,
             remindedForDay = o?.remindedForDay,
             overdueNotifiedDay = if (dateChanged) null else o?.overdueNotifiedDay,
         )
@@ -169,7 +181,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
         listOf(
             f.name, f.iconType.name, f.iconValue, f.color, f.amount, f.currency, f.cycleCount, f.cycleUnit.name,
             f.next.toEpochDay(), f.payMethod.name, f.autoRenew, f.category.name, f.remind, f.remindDays, f.active,
-            f.note, f.presetKey, f.loaded,
+            f.note, f.presetKey, f.loaded, f.balance,
         )
     },
     restore = { l ->
@@ -180,6 +192,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
             payMethod = PayMethod.valueOf(l[9] as String); autoRenew = l[10] as Boolean; category = Category.valueOf(l[11] as String)
             remind = l[12] as Boolean; remindDays = l[13] as Int; active = l[14] as Boolean
             note = l[15] as String; presetKey = l[16] as String?; loaded = l[17] as Boolean
+            balance = (l.getOrNull(18) as? String).orEmpty()
         }
     },
 )
@@ -302,14 +315,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                             textStyle = MaterialTheme.typography.titleLarge.merge(TabularNums),
                         )
                         Spacer(Modifier.width(10.dp))
-                        Column(
-                            Modifier.clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable { currencyDlg = true }
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(Currencies.listSymbol(form.currency), style = MaterialTheme.typography.titleMedium)
-                            Text(Currencies.name(form.currency), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                        }
+                        CurrencyBadge(form.currency) { currencyDlg = true }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("每", style = MaterialTheme.typography.titleSmall)
@@ -356,6 +362,34 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                         if (form.autoRenew) "到期自动扣款，账单日过后自动记账并更新下次日期" else "手动付款：到期后需点「我已付款」才会更新下次日期",
                         form.autoRenew,
                     ) { form.autoRenew = it }
+                }
+            }
+
+            if (form.payMethod == PayMethod.BALANCE) {
+                Group("余额") {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Field(
+                                form.balance,
+                                { form.balance = it.filter { c -> c.isDigit() || c == '.' } },
+                                "当前余额",
+                                keyboard = KeyboardType.Decimal,
+                                modifier = Modifier.weight(1f),
+                                textStyle = MaterialTheme.typography.titleLarge.merge(TabularNums),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            CurrencyBadge(form.currency) { currencyDlg = true }
+                        }
+                        BalanceForecastCard(
+                            balance = form.balance.replace(",", "").toDoubleOrNull() ?: 0.0,
+                            amount = form.amount.replace(",", "").toDoubleOrNull(),
+                            currency = form.currency,
+                            next = form.next,
+                            cycleCount = form.cycleCount.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                            unit = form.cycleUnit,
+                            anchorDay = form.effectiveAnchorDay(),
+                        )
+                    }
                 }
             }
 
@@ -448,7 +482,13 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                                 )
                             }
                             Pill(if (p.auto) "自动" else "手动确认", if (p.auto) extra.success else cs.primary)
-                            IconButton(onClick = { vm.deletePayment(p) }) { Icon(Icons.Rounded.Close, "删除记录", Modifier.size(18.dp), tint = cs.outline) }
+                            IconButton(onClick = {
+                                if (p.balanceUsed > 0.0) {
+                                    val current = form.balance.replace(",", "").toDoubleOrNull() ?: 0.0
+                                    form.balance = (current + p.balanceUsed).toBigDecimal().stripTrailingZeros().toPlainString()
+                                }
+                                vm.deletePayment(p)
+                            }) { Icon(Icons.Rounded.Close, "删除记录", Modifier.size(18.dp), tint = cs.outline) }
                         }
                     }
                 }
@@ -501,6 +541,76 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
             },
             dismissButton = { TextButton(onClick = { deleteDlg = false }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun CurrencyBadge(code: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier.clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(Currencies.listSymbol(code), style = MaterialTheme.typography.titleMedium)
+        Text(Currencies.name(code), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun BalanceForecastCard(
+    balance: Double,
+    amount: Double?,
+    currency: String,
+    next: LocalDate,
+    cycleCount: Int,
+    unit: CycleUnit,
+    anchorDay: Int,
+) {
+    val cs = MaterialTheme.colorScheme
+    val extra = LocalExtra.current
+    val today = Billing.today()
+    val forecast = amount?.takeIf { it > 0 }?.let {
+        Balance.forecast(balance, it, next, cycleCount, unit, anchorDay)
+    }
+    val title = when {
+        forecast == null -> "填写付款金额后自动计算"
+        forecast.periods == 0 -> "余额不足 1 期"
+        else -> "余额可用 ${Balance.periodsText(forecast)}"
+    }
+    val desc = when {
+        forecast == null -> "余额按订阅币种填写，付款记账时自动扣减"
+        forecast.periods == 0 ->
+            "还需 ${Currencies.formatList(forecast.shortfall, currency)} · " +
+                if (forecast.rechargeOn <= today) "建议立即充值"
+                else "${Balance.dateText(forecast.rechargeOn, today)}前充值"
+        forecast.rechargeOn <= today -> "余额即将用完，请尽快充值"
+        else -> "预计 ${Balance.dateText(forecast.rechargeOn, today)} 用完，届时需充值"
+    }
+    val tint = when {
+        forecast == null -> cs.primary
+        forecast.periods == 0 -> extra.danger
+        else -> extra.success
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(Icons.Rounded.AccountBalanceWallet, tint, size = 32.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, color = tint)
+                Text(desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            }
+        }
+        if (amount != null && amount > 0) {
+            Text(
+                "每期 ${Currencies.formatList(amount, currency)} · 记账时从余额扣减",
+                style = MaterialTheme.typography.labelSmall, color = cs.outline,
+                modifier = Modifier.padding(start = 42.dp),
+            )
+        }
     }
 }
 

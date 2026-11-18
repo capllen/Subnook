@@ -88,7 +88,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         toast("已删除「${sub.name}」")
     }
 
-    fun deletePayment(p: PaymentRecord) = viewModelScope.launch { a.dao.deletePayment(p) }
+    fun deletePayment(p: PaymentRecord) = viewModelScope.launch { a.dao.deletePaymentWithRefund(p) }
 
     fun confirmPaid(sub: Subscription) = viewModelScope.launch {
         a.processor.confirmPaid(sub.id)
