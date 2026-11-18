@@ -5,7 +5,7 @@
 ## 未发布
 
 - 福林金额改为和其他货币一样把符号写在前面：`Ft 2,990`（同 CHF、RM 等）
-- 许可证从 MIT 改为 [PolyForm Noncommercial 1.0.0](LICENSE)：允许个人 / 学习 / 研究等非商业用途和 fork 修改，禁止商用
+- 许可证改为 [PolyForm Noncommercial 1.0.0](LICENSE)（禁止商用）：允许个人 / 学习 / 研究等非商业用途和 fork 修改
 
 ## 1.2.0
 
