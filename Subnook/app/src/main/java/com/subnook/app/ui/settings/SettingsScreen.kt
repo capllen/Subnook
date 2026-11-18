@@ -199,7 +199,7 @@ fun SettingsScreen(vm: MainViewModel) {
         }
 
         Group("关于") {
-            Item(Icons.Rounded.Info, Color(0xFF64748B), "Subnook", "版本 ${BuildConfig.VERSION_NAME} · MIT 开源") {
+            Item(Icons.Rounded.Info, Color(0xFF64748B), "Subnook", "版本 ${BuildConfig.VERSION_NAME} · 源码公开，禁止商用") {
                 openUrl(UpdateChecker.REPO_URL)
             }
             Divider()
