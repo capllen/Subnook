@@ -3,6 +3,7 @@
 # 顺序：Google Play 商店图标 -> App Store(中国区，找不到再查美区) 图标 -> 网站 favicon
 # 注意：腾讯视频/芒果TV 的 App Store 图标常带活动文案，所以 presets.psv 里只留了域名，走 favicon
 # 起点读书 / ABEMA 的图标同理：起点是手工裁掉 App Store 图标底部促销条后的版本，--force 重抓前先备份
+# 华为云空间 / OPPO 云服务 / vivo 云服务是手工图标（华为官网 SVG 内嵌原图、OPPO 安装包、vivo 96px 网站图标超分），psv 里来源故意留空
 # 用法: bash tools/fetch_icons.sh [--force]     已存在的图标默认跳过
 set -u
 cd "$(dirname "$0")/.."

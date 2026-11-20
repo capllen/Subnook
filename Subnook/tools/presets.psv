@@ -70,6 +70,11 @@ p115|115网盘会员|CLOUD|#2777F8|500|CNY|1|YEAR|ALIPAY|com.ylmf.androidclient|
 xunlei|迅雷超级会员|CLOUD|#1E86FF|30|CNY|1|MONTH|ALIPAY|com.xunlei.downloadprovider|id:com.xunlei.mvideo|xunlei.com|Storage
 tianyi|天翼云盘会员|CLOUD|#1A73E8|10|CNY|1|MONTH|ALIPAY|com.cn21.ecloud|cn:天翼云盘|cloud.189.cn|Cloud
 mcloud|中国移动云盘会员|CLOUD|#00A0E9|10|CNY|1|MONTH|ALIPAY|com.chinamobile.mcloud|id:cn.10086.mobileClouds|yun.139.com|Cloud
+xiaomicloud|小米云服务会员|CLOUD|#2D9BFF|6|CNY|1|MONTH|ALIPAY||id:com.xiaomi.micloud|i.mi.com|Cloud
+huaweicloud|华为云空间|CLOUD|#007DFF|6|CNY|1|MONTH|ALIPAY||||Cloud
+honorcloud|荣耀云空间|CLOUD|#00A6FF|6|CNY|1|MONTH|ALIPAY||||Cloud
+oppocloud|OPPO 云服务|CLOUD|#00A971|6|CNY|1|MONTH|ALIPAY||||Cloud
+vivocloud|vivo 云服务|CLOUD|#415FFF|6|CNY|1|MONTH|ALIPAY||||Cloud
 nutstore|坚果云|CLOUD|#3B8CEB|199|CNY|1|YEAR|ALIPAY|com.nutstore.android|Nutstore|jianguoyun.com|Cloud
 pan123|123云盘会员|CLOUD|#3B82F6|15|CNY|1|MONTH|ALIPAY||cn:123云盘|123pan.com|Cloud
 onedrive|OneDrive 100GB|CLOUD|#0078D4|1.99|USD|1|MONTH|CREDIT_CARD|com.microsoft.skydrive|OneDrive|onedrive.live.com|Cloud
