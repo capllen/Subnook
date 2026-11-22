@@ -13,6 +13,18 @@ import org.junit.Test
 import java.time.LocalDate
 
 class BillingTest {
+    // 没填起始账单日时从「今年」第一个账单日推算，测试里固定今天，明年跑也不会变
+    @org.junit.Before fun pinToday() { Billing.todayOverride = LocalDate.of(2026, 11, 22) }
+    @org.junit.After fun unpinToday() { Billing.todayOverride = null }
+
+    @Test fun defaultFirstBillingDayIsFirstBillThisYear() {
+        assertEquals(LocalDate.of(2026, 1, 5), Billing.defaultFirstBillingDay(sub(LocalDate.of(2026, 12, 5))))
+        assertEquals(LocalDate.of(2026, 3, 1), Billing.defaultFirstBillingDay(sub(LocalDate.of(2027, 3, 1), unit = CycleUnit.YEAR)))
+        // 今年没有账单（下次就在明年、两年一付）：就是下次付款日
+        assertEquals(LocalDate.of(2027, 3, 1), Billing.defaultFirstBillingDay(sub(LocalDate.of(2027, 3, 1), count = 2, unit = CycleUnit.YEAR)))
+        // 默认值以前的不推算：去年 12 月没有账单
+        assertEquals(emptyList<LocalDate>(), Billing.occurrences(sub(LocalDate.of(2026, 12, 5)), LocalDate.of(2025, 12, 1), LocalDate.of(2025, 12, 31)))
+    }
     private fun sub(next: LocalDate, count: Int = 1, unit: CycleUnit = CycleUnit.MONTH, amount: Double = 30.0, cur: String = "CNY") =
         Subscription(name = "t", amount = amount, currency = cur, cycleCount = count, cycleUnit = unit,
             nextBillingDay = next.toEpochDay(), anchorDay = next.dayOfMonth)

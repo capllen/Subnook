@@ -9,7 +9,10 @@ import java.time.temporal.ChronoUnit
 
 object Billing {
 
-    fun today(): LocalDate = LocalDate.now()
+    /** 单元测试固定「今天」用；正式运行为 null */
+    @Volatile var todayOverride: LocalDate? = null
+
+    fun today(): LocalDate = todayOverride ?: LocalDate.now()
 
     fun LocalDate.withAnchor(anchorDay: Int): LocalDate =
         withDayOfMonth(minOf(anchorDay, lengthOfMonth()))
@@ -31,6 +34,26 @@ object Billing {
     fun prev(sub: Subscription, from: LocalDate): LocalDate =
         shift(from, sub.cycleCount, sub.cycleUnit, sub.anchorDay, -1)
 
+    /**
+     * 起始账单日没填时的默认值：今年的第一个账单日（从下次付款日按周期往前推，不早于今年 1 月 1 日）。
+     * 下次付款日本身在今年之前（很久没付）就用下次付款日。
+     */
+    fun defaultFirstBillingDay(sub: Subscription, year: Int = today().year): LocalDate {
+        val jan1 = LocalDate.of(year, 1, 1)
+        var d = LocalDate.ofEpochDay(sub.nextBillingDay)
+        var guard = 0
+        while (guard++ < 5000) {
+            val p = prev(sub, d)
+            if (p < jan1) break
+            d = p
+        }
+        return d
+    }
+
+    /** 订阅实际用的起始账单日：填了用填的，没填用今年的第一个账单日 */
+    fun firstBillingDate(sub: Subscription): LocalDate =
+        sub.firstBillingDay?.let(LocalDate::ofEpochDay) ?: defaultFirstBillingDay(sub)
+
     /** 订阅在 [from, to] 区间内的所有账单日（基于下次付款日向前/向后推算） */
     fun occurrences(sub: Subscription, fromDate: LocalDate, toDate: LocalDate): List<LocalDate> {
         var from = fromDate
@@ -41,9 +64,9 @@ object Billing {
             from = maxOf(from, Installments.startDate(sub))
             to = minOf(to, Installments.endDate(sub))
             if (from > to) return emptyList()
-        } else sub.firstBillingDay?.let {
-            // 订阅填了起始账单日：不会早于这天
-            from = maxOf(from, LocalDate.ofEpochDay(it))
+        } else {
+            // 订阅不会早于起始账单日（没填就是今年的第一个账单日）
+            from = maxOf(from, firstBillingDate(sub))
             if (from > to) return emptyList()
         }
         val out = mutableListOf<LocalDate>()

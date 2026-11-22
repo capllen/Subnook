@@ -122,8 +122,11 @@ internal class Form {
     /** 选「其他」时填的名称（可以不填） */
     var payMethodNote by mutableStateOf("")
     var categoryNote by mutableStateOf("")
-    /** 起始账单日（只有订阅有），null = 没填 */
+    /** 起始账单日（只有订阅有），null = 用默认值（今年的第一个账单日） */
     var first by mutableStateOf<LocalDate?>(null)
+    /** 按当前填的周期和下次付款日算出的默认起始账单日 */
+    fun defaultFirst(): LocalDate =
+        build(requireName = false)?.takeIf { !it.isInstallment }?.copy(firstBillingDay = null)?.let { Billing.defaultFirstBillingDay(it) } ?: next
     var original by mutableStateOf<Subscription?>(null)
     var loaded by mutableStateOf(false)
 
@@ -516,10 +519,10 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text("起始账单日", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                            val fmt = DateTimeFormatter.ofPattern("yyyy年M月d日", java.util.Locale.CHINA)
                             Text(
-                                form.first?.let { minOf(it, form.next).format(DateTimeFormatter.ofPattern("yyyy年M月d日（E）", java.util.Locale.CHINA)) } ?: "未设置",
+                                form.first?.let { minOf(it, form.next).format(fmt) } ?: (form.defaultFirst().format(fmt) + "（默认）"),
                                 style = MaterialTheme.typography.titleSmall,
-                                color = if (form.first == null) cs.onSurfaceVariant else cs.onSurface,
                             )
                         }
                         Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
@@ -710,9 +713,10 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
     }
     if (firstDlg) {
         val nextMillis = form.next.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val shown = minOf(form.first ?: form.defaultFirst(), form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         val state = rememberDatePickerState(
-            initialSelectedDateMillis = form.first?.let { minOf(it, form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() },
-            initialDisplayedMonthMillis = form.first?.let { minOf(it, form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() } ?: nextMillis,
+            initialSelectedDateMillis = shown,
+            initialDisplayedMonthMillis = shown,
             // 不能晚于下次付款日
             selectableDates = object : androidx.compose.material3.SelectableDates {
                 override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= nextMillis
@@ -728,7 +732,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
             },
             dismissButton = {
                 Row {
-                    if (form.first != null) TextButton(onClick = { form.first = null; firstDlg = false }) { Text("清除") }
+                    if (form.first != null) TextButton(onClick = { form.first = null; firstDlg = false }) { Text("恢复默认") }
                     TextButton(onClick = { firstDlg = false }) { Text("取消") }
                 }
             },
