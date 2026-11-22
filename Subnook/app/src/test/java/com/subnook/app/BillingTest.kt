@@ -17,6 +17,23 @@ class BillingTest {
     @org.junit.Before fun pinToday() { Billing.todayOverride = LocalDate.of(2026, 11, 22) }
     @org.junit.After fun unpinToday() { Billing.todayOverride = null }
 
+    @Test fun nextFromFirstBillingDay() {
+        val today = LocalDate.of(2026, 11, 22)
+        // 1 月 5 日起每月：下一次是 12 月 5 日
+        assertEquals(LocalDate.of(2026, 12, 5), Billing.nextFromFirst(LocalDate.of(2026, 1, 5), 1, CycleUnit.MONTH, today))
+        // 今天开始订：今天这笔算已付，下一次是下个月
+        assertEquals(LocalDate.of(2026, 12, 22), Billing.nextFromFirst(today, 1, CycleUnit.MONTH, today))
+        // 某一期正好是今天：下次就是今天
+        assertEquals(today, Billing.nextFromFirst(LocalDate.of(2026, 10, 22), 1, CycleUnit.MONTH, today))
+        // 起始账单日还没到：第一笔就是它
+        assertEquals(LocalDate.of(2026, 12, 1), Billing.nextFromFirst(LocalDate.of(2026, 12, 1), 1, CycleUnit.MONTH, today))
+        // 月底：1 月 31 日起，11 月是 30 日，不会被 2 月带成 28 日
+        assertEquals(LocalDate.of(2026, 11, 30), Billing.nextFromFirst(LocalDate.of(2026, 1, 31), 1, CycleUnit.MONTH, today))
+        // 年付、每 2 周
+        assertEquals(LocalDate.of(2027, 3, 1), Billing.nextFromFirst(LocalDate.of(2024, 3, 1), 1, CycleUnit.YEAR, today))
+        assertEquals(LocalDate.of(2026, 11, 26), Billing.nextFromFirst(LocalDate.of(2026, 11, 12), 2, CycleUnit.WEEK, today))
+    }
+
     @Test fun defaultFirstBillingDayIsFirstBillThisYear() {
         assertEquals(LocalDate.of(2026, 1, 5), Billing.defaultFirstBillingDay(sub(LocalDate.of(2026, 12, 5))))
         assertEquals(LocalDate.of(2026, 3, 1), Billing.defaultFirstBillingDay(sub(LocalDate.of(2027, 3, 1), unit = CycleUnit.YEAR)))

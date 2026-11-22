@@ -50,6 +50,19 @@ object Billing {
         return d
     }
 
+    /**
+     * 由起始账单日和周期算下次付款日：起始账单日在今天之后就是它本身（第一笔还没到）；
+     * 否则是「起始账单日 + k 个周期」（k ≥ 1）里第一个不早于今天的（起始当天的那笔算已付）。
+     * 每次都从起始账单日直接加 k 个周期，月底的日子不会越推越早（1 月 31 日 → 2 月 28 日 → 3 月 31 日）。
+     */
+    fun nextFromFirst(first: LocalDate, count: Int, unit: CycleUnit, today: LocalDate = today()): LocalDate {
+        if (first > today) return first
+        var k = 1
+        var d = shift(first, count, unit, first.dayOfMonth, k)
+        while (d < today && k < 100_000) d = shift(first, count, unit, first.dayOfMonth, ++k)
+        return d
+    }
+
     /** 订阅实际用的起始账单日：填了用填的，没填用今年的第一个账单日 */
     fun firstBillingDate(sub: Subscription): LocalDate =
         sub.firstBillingDay?.let(LocalDate::ofEpochDay) ?: defaultFirstBillingDay(sub)

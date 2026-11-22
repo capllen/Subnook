@@ -127,6 +127,28 @@ internal class Form {
     /** 按当前填的周期和下次付款日算出的默认起始账单日 */
     fun defaultFirst(): LocalDate =
         build(requireName = false)?.takeIf { !it.isInstallment }?.copy(firstBillingDay = null)?.let { Billing.defaultFirstBillingDay(it) } ?: next
+    /** 下次付款日是从这天按周期推出来的：月付按它的日子扣（1 月 31 日起的就是每月月底） */
+    var anchorFrom by mutableStateOf<LocalDate?>(null)
+
+    /** 订阅的下次付款日 = 起始账单日 + 周期（自动算，不再手动选） */
+    fun recomputeNext(from: LocalDate) {
+        val cnt = cycleCount.toIntOrNull()?.takeIf { it in 1..999 } ?: return
+        next = Billing.nextFromFirst(from, cnt, cycleUnit)
+        anchorFrom = from
+    }
+
+    fun pickFirst(d: LocalDate?) {
+        first = d
+        d?.let(::recomputeNext)
+    }
+
+    /** 改周期：没填起始账单日时，用改之前的默认起始账单日重新推 */
+    fun changeCycle(count: String? = null, unit: CycleUnit? = null) {
+        val from = if (isInstallment) null else first ?: defaultFirst()
+        count?.let { cycleCount = it }
+        unit?.let { cycleUnit = it }
+        from?.let(::recomputeNext)
+    }
     var original by mutableStateOf<Subscription?>(null)
     var loaded by mutableStateOf(false)
 
@@ -228,7 +250,13 @@ internal class Form {
         val o = original
         val dateChanged = o == null || o.nextBillingDay != next.toEpochDay()
         val base = o ?: Subscription(name = "", amount = 0.0, currency = "", nextBillingDay = 0, anchorDay = 1)
-        val anchor = if (o == null || dateChanged || o.cycleUnit != cycleUnit) next.dayOfMonth else o.anchorDay
+        val af = anchorFrom
+        val anchor = when {
+            // 下次付款日由起始账单日推出来的：按起始账单日的日子扣
+            !isInstallment && af != null -> af.dayOfMonth
+            o == null || dateChanged || o.cycleUnit != cycleUnit -> next.dayOfMonth
+            else -> o.anchorDay
+        }
         val bal = (if (balanceTouched || o == null) balanceValue() else o.balance) ?: return null
         if (isInstallment) {
             val principal = principalValue() ?: return null
@@ -282,7 +310,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
             f.next.toEpochDay(), f.payMethod.name, f.autoRenew, f.category.name, f.remind, f.remindDays, f.active,
             f.note, f.presetKey, f.loaded,
             f.kind.name, f.instPrincipal, f.instTerms, f.instRate, f.instMethod.name, f.instFirst, f.instCurrent,
-            f.balance, f.balanceTouched, f.payMethodNote, f.categoryNote, f.first?.toEpochDay(),
+            f.balance, f.balanceTouched, f.payMethodNote, f.categoryNote, f.first?.toEpochDay(), f.anchorFrom?.toEpochDay(),
         )
     },
     restore = { l ->
@@ -299,6 +327,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
             balance = l[25] as String; balanceTouched = l[26] as Boolean
             payMethodNote = l[27] as String; categoryNote = l[28] as String
             first = (l[29] as Long?)?.let(LocalDate::ofEpochDay)
+            anchorFrom = (l[30] as Long?)?.let(LocalDate::ofEpochDay)
         }
     },
 )
@@ -487,30 +516,17 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                         Text("每", style = MaterialTheme.typography.titleSmall)
                         Spacer(Modifier.width(8.dp))
                         Field(
-                            form.cycleCount, { form.cycleCount = it.filter(Char::isDigit).take(3) }, null,
+                            form.cycleCount, { form.changeCycle(count = it.filter(Char::isDigit).take(3)) }, null,
                             keyboard = KeyboardType.Number,
                             isError = showErrors && (form.cycleCount.toIntOrNull() ?: 0) < 1,
                             modifier = Modifier.width(64.dp),
                             textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
                         )
                         Spacer(Modifier.width(10.dp))
-                        Segmented(CycleUnit.entries, form.cycleUnit, { it.label }, Modifier.weight(1f)) { form.cycleUnit = it }
+                        Segmented(CycleUnit.entries, form.cycleUnit, { it.label }, Modifier.weight(1f)) { form.changeCycle(unit = it) }
                     }
+                    // 起始账单日：推算以前的账单（今年花了多少、账单日历）不会早于这天，下次付款日也由它和周期算出来
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable { dateDlg = true }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconTile(Icons.Rounded.CalendarMonth, cs.primary, size = 34.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("下次付款日期", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-                            Text(form.next.format(DateTimeFormatter.ofPattern("yyyy年M月d日（E）", java.util.Locale.CHINA)), style = MaterialTheme.typography.titleSmall)
-                        }
-                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
-                    }
-                    // 起始账单日：推算以前的账单（今年花了多少、账单日历）不会早于这天；分期用自己的第 1 期日期
-                    if (!form.isInstallment) Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable { firstDlg = true }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -526,6 +542,19 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                             )
                         }
                         Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
+                    }
+                    // 下次付款日期 = 起始账单日 + 周期，自动算，不能点
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer)
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconTile(Icons.Rounded.CalendarMonth, cs.primary, size = 34.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("下次付款日期", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                            Text(form.next.format(DateTimeFormatter.ofPattern("yyyy年M月d日（E）", java.util.Locale.CHINA)), style = MaterialTheme.typography.titleSmall)
+                        }
                     }
                 }
             }
@@ -712,21 +741,14 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
         ) { DatePicker(state) }
     }
     if (firstDlg) {
-        val nextMillis = form.next.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val shown = minOf(form.first ?: form.defaultFirst(), form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val state = rememberDatePickerState(
-            initialSelectedDateMillis = shown,
-            initialDisplayedMonthMillis = shown,
-            // 不能晚于下次付款日
-            selectableDates = object : androidx.compose.material3.SelectableDates {
-                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= nextMillis
-            },
-        )
+        // 任意日期都行：选了以后下次付款日跟着重新算（选在今天之后就是第一笔还没到）
+        val shown = (form.first ?: form.defaultFirst()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val state = rememberDatePickerState(initialSelectedDateMillis = shown, initialDisplayedMonthMillis = shown)
         DatePickerDialog(
             onDismissRequest = { firstDlg = false },
             confirmButton = {
                 TextButton(onClick = {
-                    state.selectedDateMillis?.let { form.first = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }
+                    state.selectedDateMillis?.let { form.pickFirst(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()) }
                     firstDlg = false
                 }) { Text("确定") }
             },
