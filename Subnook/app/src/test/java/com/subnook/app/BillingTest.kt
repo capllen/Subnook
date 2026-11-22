@@ -17,6 +17,25 @@ class BillingTest {
     @org.junit.Before fun pinToday() { Billing.todayOverride = LocalDate.of(2026, 11, 22) }
     @org.junit.After fun unpinToday() { Billing.todayOverride = null }
 
+    @Test fun deletingLatestPaymentRollsBackNextBillingDay() {
+        fun pay(day: LocalDate, prepay: Boolean = false) =
+            com.subnook.app.data.PaymentRecord(subscriptionId = 0, billingDay = day.toEpochDay(), amount = 30.0, currency = "CNY", auto = false, prepay = prepay)
+        // 手动订阅 11 月 23 日那期误点了「我已付款」，下次变成 12 月 23 日；删掉这笔就回到 11 月 23 日
+        val manual = sub(LocalDate.of(2026, 12, 23)).copy(autoRenew = false, overdueNotifiedDay = 5L)
+        val nov23 = LocalDate.of(2026, 11, 23)
+        val rolled = Billing.rollbackOnDelete(manual, pay(nov23), latestBillingDay = nov23.toEpochDay())
+        assertEquals(nov23.toEpochDay(), rolled?.nextBillingDay)
+        assertEquals(null, rolled?.overdueNotifiedDay)
+        // 不是最近一笔：只删记录
+        assertEquals(null, Billing.rollbackOnDelete(manual, pay(LocalDate.of(2026, 10, 23)), latestBillingDay = nov23.toEpochDay()))
+        // 提前还款走撤销流程
+        assertEquals(null, Billing.rollbackOnDelete(manual, pay(nov23, prepay = true), latestBillingDay = nov23.toEpochDay()))
+        // 自动续费：已经过去的那期不回滚（回滚了后台会马上再记一笔）；还没到的（提前确认的）照样回滚
+        val auto = sub(LocalDate.of(2026, 12, 23))
+        assertEquals(null, Billing.rollbackOnDelete(auto, pay(LocalDate.of(2026, 11, 20)), latestBillingDay = LocalDate.of(2026, 11, 20).toEpochDay()))
+        assertEquals(nov23.toEpochDay(), Billing.rollbackOnDelete(auto, pay(nov23), latestBillingDay = nov23.toEpochDay())?.nextBillingDay)
+    }
+
     @Test fun nextFromFirstBillingDay() {
         val today = LocalDate.of(2026, 11, 22)
         // 1 月 5 日起每月：下一次是 12 月 5 日

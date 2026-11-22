@@ -101,13 +101,21 @@ interface SubscriptionDao {
     @Query("UPDATE subscriptions SET balance = :balance WHERE id = :id")
     suspend fun setBalance(id: Long, balance: Double)
 
-    /** 删除一条付款记录；如果当时从余额扣过款，把这部分加回余额 */
+    /** 某个订阅普通付款记录（不含提前还款）里最晚的账单日 */
+    @Query("SELECT MAX(billingDay) FROM payments WHERE subscriptionId = :subId AND prepay = 0")
+    suspend fun latestBillingDay(subId: Long): Long?
+
+    /**
+     * 删除一条付款记录；如果当时从余额扣过款，把这部分加回余额。
+     * [rolled] 不为空时同时把订阅改成回滚后的样子（下次账单日退回这笔的账单日）。
+     */
     @Transaction
-    suspend fun deletePaymentWithRefund(p: PaymentRecord) {
+    suspend fun deletePaymentWithRefund(p: PaymentRecord, rolled: Subscription? = null) {
         deletePayment(p)
-        if (p.balanceUsed <= 0.0) return
         val sub = get(p.subscriptionId) ?: return
-        setBalance(sub.id, roundMoney(sub.balance + p.balanceUsed))
+        val balance = if (p.balanceUsed > 0.0) roundMoney(sub.balance + p.balanceUsed) else sub.balance
+        if (rolled != null) upsert(rolled.copy(balance = balance))
+        else if (balance != sub.balance) setBalance(sub.id, balance)
     }
 
     @Insert

@@ -63,6 +63,31 @@ object Billing {
         return d
     }
 
+    /**
+     * 删除一条付款记录后订阅该变成什么样；null = 不用回滚（只删记录）。
+     * 只回滚最近的那一笔（[latestBillingDay] 是这个订阅所有普通付款记录里最晚的账单日）：下次账单日回到这笔的账单日，
+     * 分期因为这笔还完而停用的重新启用。提前还款走撤销流程，不在这里处理。
+     * 自动续费的、账单日已经过去的不回滚：回滚了后台马上又会自动记一笔。
+     */
+    fun rollbackOnDelete(
+        sub: Subscription,
+        p: com.subnook.app.data.PaymentRecord,
+        latestBillingDay: Long?,
+        today: LocalDate = today(),
+    ): Subscription? {
+        if (p.prepay || p.subscriptionId != sub.id) return null
+        if (p.billingDay >= sub.nextBillingDay) return null
+        if (latestBillingDay != null && latestBillingDay > p.billingDay) return null
+        if (sub.autoRenew && p.billingDay < today.toEpochDay()) return null
+        val reopen = sub.isInstallment && !sub.active && Installments.isFinished(sub) && !Installments.isPaidOff(sub)
+        return Installments.normalize(
+            sub.copy(
+                nextBillingDay = p.billingDay, overdueNotifiedDay = null, remindedForDay = null,
+                active = sub.active || reopen,
+            ),
+        )
+    }
+
     /** 订阅实际用的起始账单日：填了用填的，没填用今年的第一个账单日 */
     fun firstBillingDate(sub: Subscription): LocalDate =
         sub.firstBillingDay?.let(LocalDate::ofEpochDay) ?: defaultFirstBillingDay(sub)

@@ -235,4 +235,17 @@ class InstallmentsTest {
         assertEquals(LocalDate.of(2026, 2, 28), Installments.termDate(s, 2))
         assertEquals(LocalDate.of(2026, 3, 31), Installments.termDate(s, 3))
     }
+
+    @Test fun deletingLastTermPaymentReopensInstallment() {
+        // 12 期的最后一期（11 月 15 日）误点了已付款：分期变成已还清并停用；删掉这笔记录要恢复成第 12 期待还
+        val done = Installments.normalize(phone(LocalDate.of(2026, 12, 15), current = 13, terms = 12)).copy(active = false)
+        assertTrue(Installments.isFinished(done))
+        val nov15 = LocalDate.of(2026, 11, 15)
+        val p = com.subnook.app.data.PaymentRecord(subscriptionId = done.id, billingDay = nov15.toEpochDay(), amount = 500.0, currency = "CNY", auto = false)
+        val rolled = Billing.rollbackOnDelete(done.copy(autoRenew = false), p, nov15.toEpochDay(), today = LocalDate.of(2026, 11, 22))!!
+        assertEquals(nov15.toEpochDay(), rolled.nextBillingDay)
+        assertTrue(rolled.active)
+        assertFalse(Installments.isFinished(rolled))
+        assertEquals(12, Installments.currentTerm(rolled))
+    }
 }

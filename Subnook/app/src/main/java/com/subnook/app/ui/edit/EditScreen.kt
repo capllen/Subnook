@@ -356,6 +356,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
     var deleteDlg by remember { mutableStateOf(false) }
     var prepayDlg by remember { mutableStateOf(false) }
     var undoRecord by remember { mutableStateOf<com.subnook.app.data.PaymentRecord?>(null) }
+    var deleteRecord by remember { mutableStateOf<com.subnook.app.data.PaymentRecord?>(null) }
     var showErrors by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(id, presetKey) {
@@ -543,9 +544,9 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                         }
                         Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
                     }
-                    // 下次付款日期 = 起始账单日 + 周期，自动算，不能点
+                    // 下次付款日期：改起始账单日或周期时自动按「起始账单日 + 周期」重算，也可以点开手动改
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer)
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable { dateDlg = true }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -555,6 +556,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                             Text("下次付款日期", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
                             Text(form.next.format(DateTimeFormatter.ofPattern("yyyy年M月d日（E）", java.util.Locale.CHINA)), style = MaterialTheme.typography.titleSmall)
                         }
+                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
                     }
                 }
             }
@@ -691,12 +693,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                                 else -> Pill(if (p.auto) "自动" else "手动确认", if (p.auto) extra.success else cs.primary)
                             }
                             IconButton(onClick = {
-                                if (p.prepay) undoRecord = p
-                                else {
-                                    // 余额付款的记录：钱退回余额，输入框也同步
-                                    if (p.balanceUsed > 0) form.adjustBalance(p.balanceUsed)
-                                    vm.deletePayment(p)
-                                }
+                                if (p.prepay) undoRecord = p else deleteRecord = p
                             }) { Icon(Icons.Rounded.Close, "删除记录", Modifier.size(18.dp), tint = cs.outline) }
                         }
                     }
@@ -733,7 +730,11 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
             onDismissRequest = { dateDlg = false },
             confirmButton = {
                 TextButton(onClick = {
-                    state.selectedDateMillis?.let { form.next = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }
+                    state.selectedDateMillis?.let {
+                        form.next = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()
+                        // 手动选的下次付款日：之后按它的日子扣
+                        form.anchorFrom = null
+                    }
                     dateDlg = false
                 }) { Text("确定") }
             },
@@ -792,6 +793,32 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                 }
             },
             dismissButton = { TextButton(onClick = { undoRecord = null }) { Text("取消") } },
+        )
+    }
+    deleteRecord?.let { p ->
+        // 和真正删除时用同一个判断：删的是最近一笔，下次账单日会退回这笔的账单日
+        val o = form.original
+        val latest = payments.filter { !it.prepay }.maxOfOrNull { it.billingDay }
+        val rolled = o?.let { Billing.rollbackOnDelete(it, p, latest) }
+        val dateFmt = DateTimeFormatter.ofPattern("yyyy年M月d日")
+        AppAlertDialog(
+            onDismissRequest = { deleteRecord = null },
+            title = { Text("删除这条付款记录？") },
+            text = {
+                Text(
+                    if (rolled != null) "下次付款日期会回滚到 ${LocalDate.ofEpochDay(rolled.nextBillingDay).format(dateFmt)}。"
+                    else "${LocalDate.ofEpochDay(p.billingDay).format(dateFmt)} ${Currencies.formatList(p.amount, p.currency)}",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteRecord = null
+                    // 余额付款的记录：钱退回余额，输入框也同步
+                    if (p.balanceUsed > 0) form.adjustBalance(p.balanceUsed)
+                    vm.deletePayment(p)
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleteRecord = null }) { Text("取消") } },
         )
     }
     if (prepayDlg) form.original?.let { o ->

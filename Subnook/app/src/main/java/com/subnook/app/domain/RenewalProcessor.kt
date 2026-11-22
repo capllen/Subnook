@@ -127,8 +127,12 @@ class RenewalProcessor(
 
     suspend fun deleteTopUp(t: com.subnook.app.data.TopUp) = mutex.withLock { dao.deleteTopUpWithRevert(t) }
 
-    /** 删除付款记录：余额付款的钱退回余额 */
-    suspend fun deletePayment(p: PaymentRecord) = mutex.withLock { dao.deletePaymentWithRefund(p) }
+    /** 删除付款记录：余额付款的钱退回余额；删的是最近一笔（比如误点了「我已付款」）时，下次账单日退回这笔的账单日 */
+    suspend fun deletePayment(p: PaymentRecord) = mutex.withLock {
+        val rolled = dao.get(p.subscriptionId)?.let { Billing.rollbackOnDelete(it, p, dao.latestBillingDay(it.id)) }
+        dao.deletePaymentWithRefund(p, rolled)
+        if (rolled != null) notifier.cancel(rolled.id)
+    }
 
     /** 跳过本期（例如这期没续），不记账直接推进 */
     suspend fun skip(id: Long) = mutex.withLock {
