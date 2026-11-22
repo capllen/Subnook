@@ -64,7 +64,8 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private enum class Kind { PAID, UPCOMING, OVERDUE }
+/** ESTIMATED：今天之前、没有付款记录的账单，按周期推算出来（装 App 之前的、没记账的） */
+private enum class Kind { PAID, ESTIMATED, UPCOMING, OVERDUE }
 private data class Event(val sub: Subscription, val date: LocalDate, val amount: Double, val currency: String, val kind: Kind)
 
 @Composable
@@ -86,8 +87,14 @@ fun CalendarScreen(vm: MainViewModel, onOpen: (Long) -> Unit) {
         payments.forEach { p ->
             byId[p.subscriptionId]?.let { list += Event(it, LocalDate.ofEpochDay(p.billingDay), p.amount, p.currency, Kind.PAID) }
         }
+        val paidDays = payments.map { it.subscriptionId to it.billingDay }.toSet()
         st.active.forEach { s ->
             val due = LocalDate.ofEpochDay(s.nextBillingDay)
+            // 过去：下次付款日之前、没有付款记录的账单按周期推算出来（装 App 之前的也算）
+            val pastEnd = minOf(last, today.minusDays(1), due.minusDays(1))
+            if (first <= pastEnd) Billing.occurrences(s, first, pastEnd).forEach { d ->
+                if ((s.id to d.toEpochDay()) !in paidDays) list += Event(s, d, Billing.amountOn(s, d), s.currency, Kind.ESTIMATED)
+            }
             // 手动付款逾期未确认
             if (due < today && due >= first && due <= last) list += Event(s, due, s.amount, s.currency, Kind.OVERDUE)
             // 今天及以后：预测账单
@@ -101,7 +108,7 @@ fun CalendarScreen(vm: MainViewModel, onOpen: (Long) -> Unit) {
     val cur = st.settings.displayCurrency
     val all = events.values.flatten()
     val monthTotal = all.sumOf { st.rates.convert(it.amount, it.currency, cur) }
-    val paidTotal = all.filter { it.kind == Kind.PAID }.sumOf { st.rates.convert(it.amount, it.currency, cur) }
+    val paidTotal = all.filter { it.kind == Kind.PAID || it.kind == Kind.ESTIMATED }.sumOf { st.rates.convert(it.amount, it.currency, cur) }
 
     LazyColumn(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
@@ -176,6 +183,7 @@ fun CalendarScreen(vm: MainViewModel, onOpen: (Long) -> Unit) {
                         Spacer(Modifier.height(4.dp))
                         when (e.kind) {
                             Kind.PAID -> Pill("已付款", extra.success)
+                            Kind.ESTIMATED -> Pill("按周期推算", MaterialTheme.colorScheme.outline)
                             Kind.OVERDUE -> Pill("逾期未确认", extra.danger)
                             Kind.UPCOMING -> Pill(if (e.sub.autoRenew) "${e.sub.payMethodLabel} 自动扣款" else "${e.sub.payMethodLabel} 手动付款", MaterialTheme.colorScheme.primary)
                         }

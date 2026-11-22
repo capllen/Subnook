@@ -41,6 +41,10 @@ object Billing {
             from = maxOf(from, Installments.startDate(sub))
             to = minOf(to, Installments.endDate(sub))
             if (from > to) return emptyList()
+        } else sub.firstBillingDay?.let {
+            // 订阅填了起始账单日：不会早于这天
+            from = maxOf(from, LocalDate.ofEpochDay(it))
+            if (from > to) return emptyList()
         }
         val out = mutableListOf<LocalDate>()
         val base = LocalDate.ofEpochDay(sub.nextBillingDay)
@@ -70,9 +74,25 @@ object Billing {
     fun amountOn(sub: Subscription, date: LocalDate): Double =
         if (sub.isInstallment) Installments.amountOn(sub, date) else sub.amount
 
+    /**
+     * [from, to] 内按账单计划要付的合计（原币种）：不管付没付、有没有记账都算，
+     * 装 App 之前的账单也按周期往前推出来。首页「本月」小计和统计页每月柱状图用这个。
+     */
+    fun scheduledCost(sub: Subscription, from: LocalDate, to: LocalDate): Double =
+        occurrences(sub, from, to).sumOf { amountOn(sub, it) }
+
     /** [from, to] 内还没付的账单合计（原币种） */
     fun upcomingCost(sub: Subscription, from: LocalDate, to: LocalDate): Double =
         upcoming(sub, from, to).sumOf { amountOn(sub, it) }
+
+    /**
+     * 「未来一年」的最后一天：从今天起正好一年（不含一年后的同一天），
+     * 月付订阅在这段时间里正好 12 期、年付正好 1 期。首页和统计页都用这个窗口，数字才一致。
+     */
+    fun yearEnd(today: LocalDate): LocalDate = today.plusYears(1).minusDays(1)
+
+    /** 「未来 N 天」的最后一天（含今天共 N 天）：未来7天、未来30天 */
+    fun daysEnd(today: LocalDate, days: Int): LocalDate = today.plusDays(days - 1L)
 
     /** 折算为每年花费（原币种） */
     fun yearlyCost(sub: Subscription): Double {
@@ -94,8 +114,22 @@ object Billing {
         }
     }
 
-    fun total(subs: List<Subscription>, period: SummaryPeriod, rates: RateTable, currency: String): Double =
-        subs.filter { it.active }.sumOf { rates.convert(periodCost(it, period), it.currency, currency) }
+    /**
+     * 今年（1 月 1 日到 12 月 31 日）按账单计划应付的合计（原币种）：订阅按周期推出全年的每一期（装 App 之前的也算），
+     * 分期只算落在今年的那几期。首页 / 统计页紫色卡片的平均支出、首页占比条都用这个。
+     */
+    fun calendarYearCost(sub: Subscription, year: Int): Double =
+        scheduledCost(sub, LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31))
+
+    /** 平均支出（显示币种）：今年应付合计 ÷ 12 = 每月，÷ 今年的周数 = 每周，按年就是今年合计 */
+    fun total(subs: List<Subscription>, period: SummaryPeriod, rates: RateTable, currency: String, today: LocalDate = today()): Double {
+        val year = subs.filter { it.active }.sumOf { rates.convert(calendarYearCost(it, today.year), it.currency, currency) }
+        return when (period) {
+            SummaryPeriod.YEAR -> year
+            SummaryPeriod.MONTH -> year / 12.0
+            SummaryPeriod.WEEK -> year * 7.0 / today.lengthOfYear()
+        }
+    }
 
     /** 进入「待付款」的天数窗口：3 天内到期（含已逾期） */
     const val PAYABLE_DAYS = 3L

@@ -291,19 +291,10 @@ fun HomeScreen(
     val pending = st.active.filter { Billing.isPayable(it, today) }.sortedBy { it.nextBillingDay }
     val extra = LocalExtra.current
 
-    // ---- 本月小计：本月已付 + 本月逾期未付 + 本月剩下还要付的 ----
+    // ---- 本月小计：按账单计划算整月（1 号到月底的所有账单，装 App 之前的也算），和统计页本月柱子一致 ----
     val month = java.time.YearMonth.from(today)
-    val monthFirst = month.atDay(1)
-    val monthLast = month.atEndOfMonth()
-    val monthPayments by remember(month) {
-        vm.observePaymentsBetween(monthFirst.toEpochDay(), monthLast.toEpochDay())
-    }.collectAsState(emptyList())
     fun monthCost(list: List<Subscription>): Double = list.sumOf { s ->
-        val paid = monthPayments.filter { it.subscriptionId == s.id }.sumOf { st.rates.convert(it.amount, it.currency, cur) }
-        val next = LocalDate.ofEpochDay(s.nextBillingDay)
-        val overdue = if (next < today && next >= monthFirst) Billing.amountOn(s, next) else 0.0
-        val upcoming = if (today <= monthLast) Billing.upcomingCost(s, maxOf(today, monthFirst), monthLast) else 0.0
-        paid + st.rates.convert(overdue + upcoming, s.currency, cur)
+        st.rates.convert(Billing.scheduledCost(s, month.atDay(1), month.atEndOfMonth()), s.currency, cur)
     }
 
     // ---- 长按拖动排序：订阅和分期各自在自己的区域里拖 ----
@@ -592,12 +583,9 @@ private fun HeroCard(st: UiState, onPeriod: (SummaryPeriod) -> Unit, onCurrency:
     val period = st.settings.period
     val total = st.total(period)
     val today = LocalDate.now()
-    val next30 = st.active.sumOf { s ->
-        st.rates.convert(Billing.upcomingCost(s, today, today.plusDays(29)), s.currency, cur)
-    }
-    // 全年预计：订阅按年折算；分期按未来 12 个月实际还要还的期数（快还完的分期不会被算满一年）
-    val yearTotal = st.activeSubs.sumOf { st.rates.convert(Billing.periodCost(it, SummaryPeriod.YEAR), it.currency, cur) } +
-        st.activeInstallments.sumOf { st.rates.convert(Billing.upcomingCost(it, today, today.plusYears(1).minusDays(1)), it.currency, cur) }
+    // 大数字是平均数；下面两个是实际待付，和统计页、小组件同一个算法、同一个时间窗口
+    val next30 = st.upcoming(today, Billing.daysEnd(today, 30))
+    val nextYear = st.upcoming(today, Billing.yearEnd(today))
     val shape = RoundedCornerShape(28.dp)
     val white = Color.White
 
@@ -621,7 +609,8 @@ private fun HeroCard(st: UiState, onPeriod: (SummaryPeriod) -> Unit, onCurrency:
         }
         Column(Modifier.padding(22.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${period.unitLabel}平均支出", style = MaterialTheme.typography.labelLarge, color = white.copy(alpha = 0.78f))
+                // 按年时就是今年应付合计，不是平均数
+                Text(if (period == SummaryPeriod.YEAR) "当年支出" else "${period.unitLabel}平均支出", style = MaterialTheme.typography.labelLarge, color = white.copy(alpha = 0.78f))
                 Spacer(Modifier.weight(1f))
                 Row(
                     Modifier.clip(CircleShape).background(white.copy(alpha = 0.16f)).clickable(onClick = onCurrency)
@@ -643,8 +632,8 @@ private fun HeroCard(st: UiState, onPeriod: (SummaryPeriod) -> Unit, onCurrency:
             SpendBar(st)
             Spacer(Modifier.height(16.dp))
             Row {
-                Stat("未来 30 天", Currencies.format(next30, cur), Modifier.weight(1f))
-                Stat("全年预计", Currencies.format(yearTotal, cur), Modifier.weight(1f))
+                Stat("未来30天", Currencies.format(next30, cur), Modifier.weight(1f))
+                Stat("未来一年", Currencies.format(nextYear, cur), Modifier.weight(1f))
                 val inst = st.activeInstallments.size
                 if (inst == 0) Stat("订阅数", "${st.active.size}", Modifier.weight(0.6f))
                 else Stat("订阅+分期", "${st.activeSubs.size}+$inst", Modifier.weight(0.6f))
@@ -667,7 +656,9 @@ private fun HeroCard(st: UiState, onPeriod: (SummaryPeriod) -> Unit, onCurrency:
 @Composable
 private fun SpendBar(st: UiState) {
     val cur = st.settings.displayCurrency
-    val parts = st.active.map { it to st.rates.convert(Billing.periodCost(it, SummaryPeriod.MONTH), it.currency, cur) }
+    // 和上面的平均支出同一个口径：今年按账单计划应付多少
+    val year = java.time.LocalDate.now().year
+    val parts = st.active.map { it to st.rates.convert(Billing.calendarYearCost(it, year), it.currency, cur) }
         .filter { it.second > 0 }.sortedByDescending { it.second }
     val sum = parts.sumOf { it.second }
     val anim by animateFloatAsState(if (sum > 0) 1f else 0f, label = "bar")

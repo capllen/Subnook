@@ -157,6 +157,9 @@ data class Subscription(
     // ---- DB v7 新增：选「其他」时用户自己填的名称（可以不填）----
     @ColumnInfo(defaultValue = "") val payMethodNote: String = "",
     @ColumnInfo(defaultValue = "") val categoryNote: String = "",
+    // ---- DB v9 新增（v8 被 1.3.0 build 25 用过，跳过）----
+    /** 订阅的第一笔账单日（epochDay），推算以前的账单时不会早于这天；null = 没填，按周期一直往前推。分期用 instStartDay */
+    val firstBillingDay: Long? = null,
 ) {
     val isInstallment: Boolean get() = kind == SubKind.INSTALLMENT
 

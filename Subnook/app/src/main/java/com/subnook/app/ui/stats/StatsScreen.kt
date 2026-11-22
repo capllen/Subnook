@@ -1,6 +1,7 @@
 package com.subnook.app.ui.stats
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -38,7 +39,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,22 +87,34 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
     val cur = st.settings.displayCurrency
     val active = st.active
     var pickCurrency by remember { mutableStateOf(false) }
-    fun monthly(s: Subscription) = st.rates.convert(Billing.periodCost(s, SummaryPeriod.MONTH), s.currency, cur)
-    val monthTotal = active.sumOf(::monthly)
+    // 紫色卡片的大数字是平均数；下面默认按「未来一年」实际待付，点柱状图某个月就只看那个月（整月按账单计划），点空白处回到未来一年
+    val today = LocalDate.now()
+    val end = Billing.yearEnd(today)
+    // 每月柱状图：本月起 12 个自然月，每个月都按账单计划算整月（本月 1 号到今天的账单、装 App 之前的也算），和首页「本月」小计一致
+    val months = (0 until 12).map { YearMonth.from(today).plusMonths(it.toLong()) }
+    val ranges = months.map { ym -> ym.atDay(1) to ym.atEndOfMonth() }
+    val perMonth = ranges.map { (f, t) -> active.sumOf { st.rates.convert(Billing.scheduledCost(it, f, t), it.currency, cur) } }
+    var selMonth by remember { mutableStateOf<YearMonth?>(null) }
+    val selIdx = months.indexOf(selMonth).takeIf { it >= 0 }
+    val scope = selIdx?.let { "${months[it].year}年${months[it].monthValue}月" } ?: "未来一年"
+    // 所选时间段内每项要付多少（原币种）；这段时间没有账单的不参与下面的统计
+    val yearOrig = active.associate { it.id to Billing.upcomingCost(it, today, end) }
+    val origOf = selIdx?.let { i -> active.associate { it.id to Billing.scheduledCost(it, ranges[i].first, ranges[i].second) } } ?: yearOrig
+    val inScope = active.filter { origOf.getValue(it.id) > 0 }
+    fun cost(s: Subscription) = st.rates.convert(origOf.getValue(s.id), s.currency, cur)
+    val scopeTotal = inScope.sumOf(::cost)
+
+    // 颜色按「未来一年」的排名固定下来，切换月份时同一个分类 / 付款方式不变色（饼图动画才连贯）
+    fun colorsBy(key: (Subscription) -> String, offset: Int): Map<String, Color> =
+        active.groupBy(key).entries.sortedByDescending { (_, l) -> l.sumOf { st.rates.convert(yearOrig.getValue(it.id), it.currency, cur) } }
+            .mapIndexed { i, (k, _) -> k to ChartColors[(i + offset) % ChartColors.size] }.toMap()
+    val categoryColors = colorsBy({ it.categoryLabel }, 0)
+    val methodColors = colorsBy({ it.payMethodLabel }, 3)
 
     // 分类
-    val byCategory = active.groupBy { it.categoryLabel }.map { (c, l) -> c to l }
-        .sortedByDescending { (_, l) -> l.sumOf(::monthly) }
-        .mapIndexed { i, (c, l) -> Slice(c, l.sumOf(::monthly), ChartColors[i % ChartColors.size], l.size) }
-
-    // 未来 12 个月实际要付
-    val today = LocalDate.now()
-    val months = (0 until 12).map { YearMonth.from(today).plusMonths(it.toLong()) }
-    val perMonth = months.map { ym ->
-        val from = maxOf(ym.atDay(1), today)
-        val to = ym.atEndOfMonth()
-        active.sumOf { s -> st.rates.convert(Billing.upcomingCost(s, from, to), s.currency, cur) }
-    }
+    val byCategory = inScope.groupBy { it.categoryLabel }.map { (c, l) -> c to l }
+        .sortedByDescending { (_, l) -> l.sumOf(::cost) }
+        .map { (c, l) -> Slice(c, l.sumOf(::cost), categoryColors.getValue(c), l.size) }
 
     // 已付
     val byId = st.subs.associateBy { it.id }
@@ -137,137 +149,147 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
             }
 
             item {
-                Group("按分类（每月）") {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Donut(byCategory, Modifier.size(128.dp)) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("${byCategory.size}", style = MaterialTheme.typography.headlineSmall)
-                                    Text("个分类", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                                }
-                            }
-                            Spacer(Modifier.width(18.dp))
-                            byCategory.firstOrNull()?.let { top ->
-                                Column(Modifier.weight(1f)) {
-                                    Text("花得最多", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(10.dp).clip(CircleShape).background(top.color))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(top.label, style = MaterialTheme.typography.titleMedium)
-                                    }
-                                    Text(
-                                        "每月 ${Currencies.format(top.value, cur)} · ${top.count} 个",
-                                        style = MaterialTheme.typography.bodySmall.merge(TabularNums), color = cs.onSurfaceVariant,
-                                    )
-                                    Text(
-                                        "占 ${if (monthTotal > 0) kotlin.math.round(top.value / monthTotal * 100).toInt() else 0}%",
-                                        style = MaterialTheme.typography.headlineSmall, color = top.color,
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            byCategory.forEach { s -> LegendRow(s, monthTotal, cur) }
-                        }
-                    }
-                }
-            }
-
-            item {
-                Group("未来 12 个月实际待付") {
-                    Column(Modifier.padding(16.dp)) {
-                        val sum = perMonth.sum()
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(Currencies.format(sum, cur), style = MaterialTheme.typography.headlineSmall.merge(TabularNums))
-                            Spacer(Modifier.width(8.dp))
-                            Text("合计 · 最高 ${months[perMonth.indexOf(perMonth.max())].monthValue} 月", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        MonthBars(months, perMonth, cur)
-                    }
-                }
-            }
-
-            item {
-                Group("花费排行（每月）") {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        active.sortedByDescending(::monthly).take(10).forEachIndexed { i, s ->
-                            RankRow(i + 1, s, monthly(s), monthTotal, cur) { onOpen(s.id) }
-                        }
-                    }
-                }
-            }
-
-            item {
-                val byMethod = active.groupBy { it.payMethodLabel }
-                    .map { (m, l) -> m to l }.sortedByDescending { (_, l) -> l.sumOf(::monthly) }
-                    .mapIndexed { i, (m, l) -> Slice(m, l.sumOf(::monthly), ChartColors[(i + 3) % ChartColors.size], l.size) }
-                Group("按付款方式（每月）") {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StackBar(byMethod)
-                        byMethod.forEach { s -> LegendRow(s, monthTotal, cur) }
-                    }
-                }
-            }
-
-            // 有分期时：订阅和分期各占多少（两者都已计入上面的总额和各项统计）
-            if (active.any { it.isInstallment }) item {
-                val subs = active.filter { !it.isInstallment }
-                val inst = active.filter { it.isInstallment }
-                val parts = listOf(
-                    Slice("订阅", subs.sumOf(::monthly), ChartColors[0], subs.size),
-                    Slice("分期还款", inst.sumOf(::monthly), ChartColors[7], inst.size),
-                ).filter { it.count > 0 }
-                val left = inst.sumOf { st.rates.convert(com.subnook.app.domain.Installments.summary(it).remainingAmount, it.currency, cur) }
-                Group("订阅 / 分期（每月）") {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StackBar(parts)
-                        parts.forEach { s -> LegendRow(s, monthTotal, cur) }
+                // 大数字始终等于下面各组统计的合计：默认未来一年（和紫色卡片一致），选中月份时是那个月整月
+                // 标题就是当前统计范围（未来一年 / 2027年1月），和下面各组的「（未来一年）」一致
+                Group(scope) {
+                    // 点卡片里柱子以外的空白处：取消选中，回到未来一年
+                    Column(Modifier.clickable(interactionSource = null, indication = null) { selMonth = null }.padding(16.dp)) {
                         Text(
-                            "分期剩余待还 ${Currencies.format(left, cur)}",
-                            style = MaterialTheme.typography.bodySmall.merge(TabularNums), color = cs.onSurfaceVariant,
+                            Currencies.format(scopeTotal, cur),
+                            style = MaterialTheme.typography.headlineSmall.merge(TabularNums),
                         )
+                        Spacer(Modifier.height(14.dp))
+                        MonthBars(months, perMonth, selIdx) { i -> selMonth = if (i == selIdx) null else months[i] }
                     }
                 }
             }
 
-            item {
-                val auto = active.filter { it.autoRenew }
-                val manual = active.filter { !it.autoRenew }
-                val extra = LocalExtra.current
-                val parts = listOf(
-                    Slice("自动续费", auto.sumOf(::monthly), extra.success, auto.size),
-                    Slice("手动付款", manual.sumOf(::monthly), extra.warning, manual.size),
-                ).filter { it.count > 0 }
-                Group("自动 / 手动（每月）") {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StackBar(parts)
-                        parts.forEach { s -> LegendRow(s, monthTotal, cur) }
+            if (inScope.isEmpty()) {
+                item {
+                    SoftCard(Modifier.fillMaxWidth()) {
+                        Text("${scope}没有待付账单", Modifier.padding(24.dp), color = cs.onSurfaceVariant)
                     }
                 }
-            }
+            } else {
+                item {
+                    Group("按分类（$scope）") {
+                        Column(Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Donut(byCategory, Modifier.size(128.dp)) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("${byCategory.size}", style = MaterialTheme.typography.headlineSmall)
+                                        Text("个分类", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                                    }
+                                }
+                                Spacer(Modifier.width(18.dp))
+                                byCategory.firstOrNull()?.let { top ->
+                                    Column(Modifier.weight(1f)) {
+                                        Text("花得最多", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(10.dp).clip(CircleShape).background(top.color))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(top.label, style = MaterialTheme.typography.titleMedium)
+                                        }
+                                        Text(
+                                            "${Currencies.format(top.value, cur)} · ${top.count} 个",
+                                            style = MaterialTheme.typography.bodySmall.merge(TabularNums), color = cs.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            "占 ${if (scopeTotal > 0) kotlin.math.round(top.value / scopeTotal * 100).toInt() else 0}%",
+                                            style = MaterialTheme.typography.headlineSmall, color = top.color,
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                byCategory.forEach { s -> LegendRow(s, scopeTotal, cur) }
+                            }
+                        }
+                    }
+                }
 
-            item {
-                val byCur = active.groupBy { it.currency }.map { (c, l) -> c to l }
-                    .sortedByDescending { (_, l) -> l.sumOf(::monthly) }
-                Group("按原始币种（每月）") {
-                    Column(Modifier.padding(vertical = 6.dp)) {
-                        byCur.forEach { (c, l) ->
-                            val orig = l.sumOf { Billing.periodCost(it, SummaryPeriod.MONTH) }
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                                // 只有这一栏显示币种代码，方便区分 ¥(CNY) 和 JP¥ 等
-                                Box(
-                                    Modifier.clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainer).padding(horizontal = 8.dp, vertical = 3.dp),
-                                ) { Text(c, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold) }
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    "${Currencies.name(c)} · ${l.size} 个", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(Currencies.format(orig, c), style = MaterialTheme.typography.titleSmall.merge(TabularNums))
-                                    if (c != cur) Text("≈ " + Currencies.format(l.sumOf(::monthly), cur), style = MaterialTheme.typography.labelSmall, color = cs.outline)
+                item {
+                    Group("花费排行（$scope）") {
+                        Column(Modifier.padding(vertical = 8.dp)) {
+                            inScope.sortedByDescending(::cost).take(10).forEachIndexed { i, s ->
+                                RankRow(i + 1, s, cost(s), scopeTotal, cur) { onOpen(s.id) }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    val byMethod = inScope.groupBy { it.payMethodLabel }
+                        .map { (m, l) -> m to l }.sortedByDescending { (_, l) -> l.sumOf(::cost) }
+                        .map { (m, l) -> Slice(m, l.sumOf(::cost), methodColors.getValue(m), l.size) }
+                    Group("按付款方式（$scope）") {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            StackBar(byMethod)
+                            byMethod.forEach { s -> LegendRow(s, scopeTotal, cur) }
+                        }
+                    }
+                }
+
+                // 有分期时：订阅和分期各占多少（两者都已计入上面的总额和各项统计）
+                if (inScope.any { it.isInstallment }) item {
+                    val subs = inScope.filter { !it.isInstallment }
+                    val inst = inScope.filter { it.isInstallment }
+                    val parts = listOf(
+                        Slice("订阅", subs.sumOf(::cost), ChartColors[0], subs.size),
+                        Slice("分期还款", inst.sumOf(::cost), ChartColors[7], inst.size),
+                    ).filter { it.count > 0 }
+                    val left = active.filter { it.isInstallment }
+                        .sumOf { st.rates.convert(com.subnook.app.domain.Installments.summary(it).remainingAmount, it.currency, cur) }
+                    Group("订阅 / 分期（$scope）") {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            StackBar(parts)
+                            parts.forEach { s -> LegendRow(s, scopeTotal, cur) }
+                            Text(
+                                "分期剩余待还 ${Currencies.format(left, cur)}",
+                                style = MaterialTheme.typography.bodySmall.merge(TabularNums), color = cs.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    val auto = inScope.filter { it.autoRenew }
+                    val manual = inScope.filter { !it.autoRenew }
+                    val extra = LocalExtra.current
+                    val parts = listOf(
+                        Slice("自动续费", auto.sumOf(::cost), extra.success, auto.size),
+                        Slice("手动付款", manual.sumOf(::cost), extra.warning, manual.size),
+                    ).filter { it.count > 0 }
+                    Group("自动 / 手动（$scope）") {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            StackBar(parts)
+                            parts.forEach { s -> LegendRow(s, scopeTotal, cur) }
+                        }
+                    }
+                }
+
+                item {
+                    val byCur = inScope.groupBy { it.currency }.map { (c, l) -> c to l }
+                        .sortedByDescending { (_, l) -> l.sumOf(::cost) }
+                    Group("按原始币种（$scope）") {
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            byCur.forEach { (c, l) ->
+                                val orig = l.sumOf { origOf.getValue(it.id) }
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    // 只有这一栏显示币种代码，方便区分 ¥(CNY) 和 JP¥ 等
+                                    Box(
+                                        Modifier.clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainer).padding(horizontal = 8.dp, vertical = 3.dp),
+                                    ) { Text(c, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold) }
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(
+                                        "${Currencies.name(c)} · ${l.size} 个", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(Currencies.format(orig, c), style = MaterialTheme.typography.titleSmall.merge(TabularNums))
+                                        if (c != cur) Text("≈ " + Currencies.format(l.sumOf(::cost), cur), style = MaterialTheme.typography.labelSmall, color = cs.outline)
+                                    }
                                 }
                             }
                         }
@@ -317,9 +339,10 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
 private fun PeriodTiles(st: UiState, onCurrency: () -> Unit) {
     val extra = LocalExtra.current
     val cur = st.settings.displayCurrency
+    val today = LocalDate.now()
     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(extra.heroBrush).padding(18.dp)) {
         Column {
-            // 每月作为主数字；每周/每年/每天放到下面一排。币种在右上角切换（与首页紫色卡片一致），金额里不再带代码
+            // 大数字是每月平均（和首页紫色卡片一样）；下面一排是实际待付：未来7天 / 未来30天 / 未来一年。币种在右上角切换（与首页紫色卡片一致），金额里不再带代码
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("每月平均支出", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.75f))
                 Spacer(Modifier.weight(1f))
@@ -340,11 +363,12 @@ private fun PeriodTiles(st: UiState, onCurrency: () -> Unit) {
             Spacer(Modifier.height(14.dp))
             Row {
                 listOf(
-                    "每周" to st.total(SummaryPeriod.WEEK),
-                    "每年" to st.total(SummaryPeriod.YEAR),
-                    "每天" to st.total(SummaryPeriod.YEAR) / 365.2425,
+                    "未来7天" to st.upcoming(today, Billing.daysEnd(today, 7)),
+                    "未来30天" to st.upcoming(today, Billing.daysEnd(today, 30)),
+                    "未来一年" to st.upcoming(today, Billing.yearEnd(today)),
                 ).forEachIndexed { i, (label, v) ->
-                    Column(Modifier.weight(if (i == 1) 1.25f else 1f)) {
+                    // 一年的金额位数最多，给宽一点
+                    Column(Modifier.weight(if (i == 2) 1.25f else 1f)) {
                         Text(label, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.65f))
                         Text(
                             Currencies.format(v, cur),
@@ -358,10 +382,45 @@ private fun PeriodTiles(st: UiState, onCurrency: () -> Unit) {
     }
 }
 
+/** 环形图里一个分类的扇区：起点 / 终点都是 0~1（占整圈的比例） */
+private data class Arc(val start: Float, val end: Float, val color: Color)
+
+private fun arcsOf(slices: List<Slice>): Map<String, Arc> {
+    val total = slices.sumOf { it.value }.takeIf { it > 0 } ?: return emptyMap()
+    var acc = 0.0
+    return slices.associate { s ->
+        val a = Arc((acc / total).toFloat(), ((acc + s.value) / total).toFloat(), s.color)
+        acc += s.value
+        s.label to a
+    }
+}
+
+/** 从 from 过渡到 to 的第 t（0~1）帧：新出现的分类从自己的起点长出来，消失的分类缩回自己的起点 */
+private fun blend(from: Map<String, Arc>, to: Map<String, Arc>, t: Float): Map<String, Arc> {
+    fun lerp(a: Float, b: Float) = a + (b - a) * t
+    val out = LinkedHashMap<String, Arc>()
+    for ((k, b) in to) {
+        // 第一次出现（页面刚打开）时整圈从 12 点方向顺时针扫出来
+        val a = from[k] ?: if (from.isEmpty()) Arc(0f, 0f, b.color) else Arc(b.start, b.start, b.color)
+        out[k] = Arc(lerp(a.start, b.start), lerp(a.end, b.end), b.color)
+    }
+    for ((k, a) in from) if (k !in to) out[k] = Arc(a.start, lerp(a.end, a.start), a.color)
+    return out
+}
+
 @Composable
 private fun Donut(slices: List<Slice>, modifier: Modifier, center: @Composable () -> Unit) {
-    val anim = remember { Animatable(0f) }
-    LaunchedEffect(slices.size) { anim.animateTo(1f, tween(700)) }
+    val target = remember(slices) { arcsOf(slices) }
+    // 动画进行中又换了月份：从当前画面上的位置接着过渡，不跳回去
+    var from by remember { mutableStateOf<Map<String, Arc>>(emptyMap()) }
+    var to by remember { mutableStateOf<Map<String, Arc>>(emptyMap()) }
+    val anim = remember { Animatable(1f) }
+    LaunchedEffect(target) {
+        from = blend(from, to, anim.value)
+        to = target
+        anim.snapTo(0f)
+        anim.animateTo(1f, tween(if (from.isEmpty()) 700 else 450, easing = FastOutSlowInEasing))
+    }
     val track = MaterialTheme.colorScheme.surfaceContainer
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -369,13 +428,15 @@ private fun Donut(slices: List<Slice>, modifier: Modifier, center: @Composable (
             val inset = stroke / 2
             val arcSize = Size(size.width - stroke, size.height - stroke)
             drawArc(track, 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
-            val total = slices.sumOf { it.value }.takeIf { it > 0 } ?: return@Canvas
-            var start = -90f
-            val gap = if (slices.size > 1) 2.5f else 0f
-            slices.forEach { s ->
-                val sweep = (s.value / total * 360f).toFloat() * anim.value
-                drawArc(s.color, start + gap / 2, (sweep - gap).coerceAtLeast(0.5f), false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Butt))
-                start += sweep
+            val arcs = blend(from, to, anim.value).values
+            val gap = if (arcs.count { it.end - it.start > 0.001f } > 1) 2.5f else 0f
+            arcs.forEach { a ->
+                val sweep = (a.end - a.start) * 360f
+                if (sweep <= 0.05f) return@forEach
+                drawArc(
+                    a.color, -90f + a.start * 360f + gap / 2, (sweep - gap).coerceAtLeast(0.5f), false,
+                    Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Butt),
+                )
             }
         }
         center()
@@ -414,40 +475,39 @@ private fun StackBar(parts: List<Slice>) {
     }
 }
 
+/** 每月柱状图：点某个月选中（下面的统计跟着只看这个月），再点一次取消；柱子上方的空白交给外面（取消选中） */
 @Composable
-private fun MonthBars(months: List<YearMonth>, values: List<Double>, cur: String) {
+private fun MonthBars(months: List<YearMonth>, values: List<Double>, selected: Int?, onSelect: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val extra = LocalExtra.current
     val max = values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
-    var selected by androidx.compose.runtime.remember { mutableIntStateOf(values.indexOf(values.max())) }
-    Column {
-        Text(
-            "${months[selected].year}年${months[selected].monthValue}月：${Currencies.format(values[selected], cur)}",
-            style = MaterialTheme.typography.labelLarge, color = cs.primary,
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth().height(140.dp), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.Bottom) {
-            values.forEachIndexed { i, v ->
-                val frac = (v / max).toFloat().coerceAtLeast(0.03f)
-                Column(
-                    Modifier.weight(1f).fillMaxHeight().clickable(interactionSource = null, indication = null) { selected = i },
-                    verticalArrangement = Arrangement.Bottom,
-                ) {
-                    Box(
-                        Modifier.fillMaxWidth().fillMaxHeight(frac).clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                            .then(if (i == selected) Modifier.background(extra.accentBrush) else Modifier.background(cs.primary.copy(alpha = 0.22f))),
-                    )
+    Row(Modifier.fillMaxWidth().height(112.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        values.forEachIndexed { i, v ->
+            val frac = (v / max).toFloat().coerceAtLeast(0.03f)
+            val on = i == selected
+            val pick = Modifier.clickable(interactionSource = null, indication = null) { onSelect(i) }
+            Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+                    // 可点范围至少占三分之一高度，矮柱子也好点；再往上才算空白
+                    Box(Modifier.fillMaxWidth().fillMaxHeight(maxOf(frac, 0.34f)).then(pick), contentAlignment = Alignment.BottomCenter) {
+                        Box(
+                            Modifier.fillMaxWidth().fillMaxHeight(frac / maxOf(frac, 0.34f))
+                                .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                                .then(
+                                    when {
+                                        on -> Modifier.background(extra.accentBrush)
+                                        selected == null -> Modifier.background(cs.primary.copy(alpha = 0.45f))
+                                        else -> Modifier.background(cs.primary.copy(alpha = 0.18f))
+                                    },
+                                ),
+                        )
+                    }
                 }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            months.forEachIndexed { i, m ->
                 Text(
-                    "${m.monthValue}", Modifier.weight(1f), textAlign = TextAlign.Center,
+                    "${months[i].monthValue}", pick.fillMaxWidth().padding(top = 6.dp), textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                    color = if (i == selected) cs.primary else cs.onSurfaceVariant,
-                    fontWeight = if (i == selected) FontWeight.Bold else null,
+                    color = if (on) cs.primary else cs.onSurfaceVariant,
+                    fontWeight = if (on) FontWeight.Bold else null,
                 )
             }
         }

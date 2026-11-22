@@ -129,8 +129,9 @@ class SubnookWidget : GlanceAppWidget() {
         val cur = settings.displayCurrency
         val today = LocalDate.now()
         val active = subs.filter { it.active }
+        // 和首页紫色卡片「未来30天」同一个窗口
         val next30 = active.sumOf { s ->
-            rates.convert(Billing.upcomingCost(s, today, today.plusDays(29)), s.currency, cur)
+            rates.convert(Billing.upcomingCost(s, today, Billing.daysEnd(today, 30)), s.currency, cur)
         }
         // 列表可以滑动，多给一些（RemoteViews 有大小限制，不要无限多）
         val items = active.sortedBy { it.nextBillingDay }.take(30).map { s ->
@@ -305,7 +306,7 @@ private fun Large(d: WidgetData, compactHeader: Boolean) {
                 Text(big, style = TextStyle(color = White, fontSize = fitSize(big, 20f, 10), fontWeight = FontWeight.Bold), maxLines = 1)
                 Spacer(GlanceModifier.defaultWeight())
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("未来 30 天", style = TextStyle(color = White55, fontSize = 10.sp))
+                    Text("未来30天", style = TextStyle(color = White55, fontSize = 10.sp))
                     Text(next30, style = TextStyle(color = White, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
                 }
             }
@@ -316,7 +317,7 @@ private fun Large(d: WidgetData, compactHeader: Boolean) {
                     Text(big, style = TextStyle(color = White, fontSize = fitSize(big, 26f, 9), fontWeight = FontWeight.Bold), maxLines = 1)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("未来 30 天", style = TextStyle(color = White55, fontSize = 11.sp))
+                    Text("未来30天", style = TextStyle(color = White55, fontSize = 11.sp))
                     Text(next30, style = TextStyle(color = White, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
                 }
             }

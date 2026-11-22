@@ -36,6 +36,10 @@ data class UiState(
 
     fun total(period: SummaryPeriod = settings.period) = Billing.total(subs, period, rates, settings.displayCurrency)
 
+    /** [from, to] 内还没付的账单合计（显示币种，订阅 + 分期）：首页 / 统计页「未来7天 / 未来30天 / 未来一年」和统计页柱状图共用 */
+    fun upcoming(from: java.time.LocalDate, to: java.time.LocalDate) =
+        active.sumOf { rates.convert(Billing.upcomingCost(it, from, to), it.currency, settings.displayCurrency) }
+
     /** 首页「订阅中」的顺序（不含分期） */
     fun sortedActive(): List<Subscription> = sorted(activeSubs)
     /** 首页「分期还款」：和订阅用同一个排序设置 */

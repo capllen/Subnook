@@ -122,6 +122,8 @@ internal class Form {
     /** 选「其他」时填的名称（可以不填） */
     var payMethodNote by mutableStateOf("")
     var categoryNote by mutableStateOf("")
+    /** 起始账单日（只有订阅有），null = 没填 */
+    var first by mutableStateOf<LocalDate?>(null)
     var original by mutableStateOf<Subscription?>(null)
     var loaded by mutableStateOf(false)
 
@@ -164,6 +166,7 @@ internal class Form {
         payMethod = s.payMethod; autoRenew = s.autoRenew; category = s.category
         remind = s.remindEnabled; remindDays = s.remindDaysBefore; active = s.active; note = s.note; presetKey = s.presetKey
         payMethodNote = s.payMethodNote; categoryNote = s.categoryNote
+        first = s.firstBillingDay?.let(LocalDate::ofEpochDay)
         kind = s.kind
         balance = if (s.balance == 0.0) "" else s.balance.plain(); balanceTouched = false
         if (s.isInstallment) {
@@ -262,6 +265,8 @@ internal class Form {
             overdueNotifiedDay = if (dateChanged) null else o?.overdueNotifiedDay,
             balance = bal,
             payMethodNote = payMethodNote.trim(), categoryNote = categoryNote.trim(),
+            // 起始账单日不能晚于下次付款日
+            firstBillingDay = first?.let { minOf(it, next) }?.toEpochDay(),
         )
     }
 }
@@ -274,7 +279,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
             f.next.toEpochDay(), f.payMethod.name, f.autoRenew, f.category.name, f.remind, f.remindDays, f.active,
             f.note, f.presetKey, f.loaded,
             f.kind.name, f.instPrincipal, f.instTerms, f.instRate, f.instMethod.name, f.instFirst, f.instCurrent,
-            f.balance, f.balanceTouched, f.payMethodNote, f.categoryNote,
+            f.balance, f.balanceTouched, f.payMethodNote, f.categoryNote, f.first?.toEpochDay(),
         )
     },
     restore = { l ->
@@ -290,6 +295,7 @@ private val FormSaver = androidx.compose.runtime.saveable.listSaver<Form, Any?>(
             instFirst = l[23] as String; instCurrent = l[24] as String
             balance = l[25] as String; balanceTouched = l[26] as Boolean
             payMethodNote = l[27] as String; categoryNote = l[28] as String
+            first = (l[29] as Long?)?.let(LocalDate::ofEpochDay)
         }
     },
 )
@@ -314,6 +320,7 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
     }
     var currencyDlg by remember { mutableStateOf(false) }
     var dateDlg by remember { mutableStateOf(false) }
+    var firstDlg by remember { mutableStateOf(false) }
     var deleteDlg by remember { mutableStateOf(false) }
     var prepayDlg by remember { mutableStateOf(false) }
     var undoRecord by remember { mutableStateOf<com.subnook.app.data.PaymentRecord?>(null) }
@@ -499,6 +506,24 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                         }
                         Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
                     }
+                    // 起始账单日：推算以前的账单（今年花了多少、账单日历）不会早于这天；分期用自己的第 1 期日期
+                    if (!form.isInstallment) Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainer).clickable { firstDlg = true }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconTile(Icons.Rounded.CalendarMonth, cs.secondary, size = 34.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("起始账单日", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                            Text(
+                                form.first?.let { minOf(it, form.next).format(DateTimeFormatter.ofPattern("yyyy年M月d日（E）", java.util.Locale.CHINA)) } ?: "未设置",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (form.first == null) cs.onSurfaceVariant else cs.onSurface,
+                            )
+                        }
+                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = cs.outline)
+                    }
                 }
             }
 
@@ -681,6 +706,32 @@ fun EditScreen(vm: MainViewModel, id: Long, presetKey: String?, onBack: () -> Un
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { dateDlg = false }) { Text("取消") } },
+        ) { DatePicker(state) }
+    }
+    if (firstDlg) {
+        val nextMillis = form.next.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = form.first?.let { minOf(it, form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() },
+            initialDisplayedMonthMillis = form.first?.let { minOf(it, form.next).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() } ?: nextMillis,
+            // 不能晚于下次付款日
+            selectableDates = object : androidx.compose.material3.SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= nextMillis
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { firstDlg = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { form.first = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() }
+                    firstDlg = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                Row {
+                    if (form.first != null) TextButton(onClick = { form.first = null; firstDlg = false }) { Text("清除") }
+                    TextButton(onClick = { firstDlg = false }) { Text("取消") }
+                }
+            },
         ) { DatePicker(state) }
     }
     saveAsk?.let { name ->

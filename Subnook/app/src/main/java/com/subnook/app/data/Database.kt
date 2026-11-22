@@ -145,15 +145,49 @@ interface SubscriptionDao {
 /** 余额按分保存，避免 0.1 + 0.2 这类浮点尾巴 */
 fun roundMoney(v: Double): Double = java.math.BigDecimal.valueOf(v).setScale(2, java.math.RoundingMode.HALF_UP).toDouble()
 
-@Database(entities = [Subscription::class, PaymentRecord::class, TopUp::class], version = 7, exportSchema = false)
+@Database(entities = [Subscription::class, PaymentRecord::class, TopUp::class], version = 9, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): SubscriptionDao
 
     companion object {
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "subnook.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_9, MIGRATION_8_9)
                 .build()
+
+        /** v9：订阅的起始账单日（可空）。v8 被 1.3.0 build 25 用过（instShortFirst），所以正式版从 v7 直接跳到 v9 */
+        private val MIGRATION_7_9 = object : Migration(7, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE subscriptions ADD COLUMN firstBillingDay INTEGER")
+            }
+        }
+
+        /** 装过 1.3.0 build 25 的：表里多一列 instShortFirst，Room 校验会失败，只能重建表把它去掉。建表语句和 Room 生成的一致 */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val cols = "`id`, `name`, `iconType`, `iconValue`, `color`, `amount`, `currency`, `cycleCount`, `cycleUnit`, `nextBillingDay`, " +
+                    "`anchorDay`, `payMethod`, `autoRenew`, `category`, `remindEnabled`, `remindDaysBefore`, `active`, `note`, `presetKey`, " +
+                    "`remindedForDay`, `overdueNotifiedDay`, `createdAt`, `sortIndex`, `kind`, `instPrincipal`, `instTerms`, `instRate`, " +
+                    "`instMethod`, `instFirstAmount`, `instStartDay`, `instTermOffset`, `instPaidBefore`, `instPrincipalBefore`, `instPaidOffDay`, " +
+                    "`balance`, `payMethodNote`, `categoryNote`"
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `subscriptions_new` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, " +
+                        "`iconType` TEXT NOT NULL, `iconValue` TEXT NOT NULL, `color` INTEGER NOT NULL, `amount` REAL NOT NULL, `currency` TEXT NOT NULL, " +
+                        "`cycleCount` INTEGER NOT NULL, `cycleUnit` TEXT NOT NULL, `nextBillingDay` INTEGER NOT NULL, `anchorDay` INTEGER NOT NULL, " +
+                        "`payMethod` TEXT NOT NULL, `autoRenew` INTEGER NOT NULL, `category` TEXT NOT NULL, `remindEnabled` INTEGER NOT NULL, " +
+                        "`remindDaysBefore` INTEGER NOT NULL, `active` INTEGER NOT NULL, `note` TEXT NOT NULL, `presetKey` TEXT, `remindedForDay` INTEGER, " +
+                        "`overdueNotifiedDay` INTEGER, `createdAt` INTEGER NOT NULL, `sortIndex` INTEGER NOT NULL DEFAULT 0, " +
+                        "`kind` TEXT NOT NULL DEFAULT 'SUBSCRIPTION', `instPrincipal` REAL NOT NULL DEFAULT 0, `instTerms` INTEGER NOT NULL DEFAULT 0, " +
+                        "`instRate` REAL NOT NULL DEFAULT 0, `instMethod` TEXT NOT NULL DEFAULT 'FEE', `instFirstAmount` REAL, " +
+                        "`instStartDay` INTEGER NOT NULL DEFAULT 0, `instTermOffset` INTEGER NOT NULL DEFAULT 0, `instPaidBefore` REAL NOT NULL DEFAULT 0, " +
+                        "`instPrincipalBefore` REAL NOT NULL DEFAULT 0, `instPaidOffDay` INTEGER, `balance` REAL NOT NULL DEFAULT 0, " +
+                        "`payMethodNote` TEXT NOT NULL DEFAULT '', `categoryNote` TEXT NOT NULL DEFAULT '', `firstBillingDay` INTEGER)",
+                )
+                db.execSQL("INSERT INTO `subscriptions_new` ($cols) SELECT $cols FROM `subscriptions`")
+                db.execSQL("DROP TABLE `subscriptions`")
+                db.execSQL("ALTER TABLE `subscriptions_new` RENAME TO `subscriptions`")
+            }
+        }
 
         /** v7：「其他」可以填名称；去掉「分期还款」分类（改成「其他」，否则 Room 读到不认识的枚举会崩） */
         private val MIGRATION_6_7 = object : Migration(6, 7) {

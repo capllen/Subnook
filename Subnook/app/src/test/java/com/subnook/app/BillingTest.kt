@@ -4,7 +4,10 @@ import com.subnook.app.data.CycleUnit
 import com.subnook.app.data.RateTable
 import com.subnook.app.data.Subscription
 import com.subnook.app.data.SummaryPeriod
+import com.subnook.app.data.InstallmentMethod
+import com.subnook.app.data.SubKind
 import com.subnook.app.domain.Billing
+import com.subnook.app.domain.Installments
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.LocalDate
@@ -40,6 +43,71 @@ class BillingTest {
         // 下次账单日在区间内时照常返回
         val t = sub(LocalDate.of(2026, 11, 20), unit = CycleUnit.WEEK)
         assertEquals(listOf(20, 27), Billing.upcoming(t, LocalDate.of(2026, 11, 17), LocalDate.of(2026, 11, 30)).map { it.dayOfMonth })
+    }
+
+    @Test fun next12MonthsMatchesYearlyCostForMonthlyAndYearly() {
+        // 首页和统计页「未来一年」用同一个窗口：月付 / 年付订阅不管账单日在今天前后，都正好是一年的钱
+        val today = LocalDate.of(2026, 11, 22)
+        val end = Billing.yearEnd(today)
+        for (day in listOf(22, 23, 25, 31)) {
+            val first = LocalDate.of(2026, 11, 1).withDayOfMonth(minOf(day, 30)).let { if (it < today) it.plusMonths(1) else it }
+            val m = sub(first.withDayOfMonth(minOf(day, first.lengthOfMonth()))).copy(anchorDay = day)
+            assertEquals("day $day", 360.0, Billing.upcomingCost(m, today, end), 1e-9)
+        }
+        for (next in listOf(today, LocalDate.of(2027, 3, 1), end)) {
+            assertEquals(99.0, Billing.upcomingCost(sub(next, unit = CycleUnit.YEAR, amount = 99.0), today, end), 1e-9)
+        }
+        // 明天到期的月付：一年后的同一天不算进来
+        assertEquals(360.0, Billing.upcomingCost(sub(today.plusDays(1)), today, end), 1e-9)
+        assertEquals(360.0, Billing.upcomingCost(sub(LocalDate.of(2026, 12, 10)), today, end), 1e-9)
+    }
+
+    @Test fun scheduledCostCountsWholeMonthIncludingBillsBeforeInstall() {
+        // 11 月 15 日才装 App，5 号那期在装之前就付了，下次账单日填的是 12 月 5 日：11 月整月仍然要算上 5 号那期
+        val nov1 = LocalDate.of(2026, 11, 1)
+        val nov30 = LocalDate.of(2026, 11, 30)
+        assertEquals(30.0, Billing.scheduledCost(sub(LocalDate.of(2026, 12, 5)), nov1, nov30), 1e-9)
+        // 本月还没到的、逾期没付的也都在
+        assertEquals(30.0, Billing.scheduledCost(sub(LocalDate.of(2026, 11, 25)), nov1, nov30), 1e-9)
+        assertEquals(30.0, Billing.scheduledCost(sub(LocalDate.of(2026, 11, 3)), nov1, nov30), 1e-9)
+        // 周付：11 月有 4 个周五
+        assertEquals(40.0, Billing.scheduledCost(sub(LocalDate.of(2026, 11, 20), unit = CycleUnit.WEEK, amount = 10.0), nov1, nov30), 1e-9)
+        // 年付：账单日不在 11 月就是 0
+        assertEquals(0.0, Billing.scheduledCost(sub(LocalDate.of(2027, 3, 1), unit = CycleUnit.YEAR), nov1, nov30), 1e-9)
+    }
+
+    @Test fun averageIsThisYearsScheduledCostOverTwelve() {
+        val r = RateTable(mapOf("CNY" to 1.0), 1)
+        val today = LocalDate.of(2026, 11, 22)
+        fun monthAvg(vararg s: Subscription) = Billing.total(s.toList(), SummaryPeriod.MONTH, r, "CNY", today)
+        // 月付：12 期；年付：今年 1 期
+        assertEquals(30.0, monthAvg(sub(LocalDate.of(2026, 12, 5))), 1e-9)
+        assertEquals(10.0, monthAvg(sub(LocalDate.of(2027, 3, 1), unit = CycleUnit.YEAR, amount = 120.0)), 1e-9)
+        // 分期：每期 100，2026-10 起 12 期 → 今年只有 10、11、12 月三期 = 300 / 12
+        val inst = Installments.normalize(
+            Subscription(
+                name = "手机", amount = 0.0, currency = "CNY", nextBillingDay = LocalDate.of(2026, 12, 15).toEpochDay(), anchorDay = 15,
+                kind = SubKind.INSTALLMENT, instPrincipal = 1200.0, instTerms = 12, instRate = 0.0, instMethod = InstallmentMethod.INTEREST_FREE,
+                instStartDay = LocalDate.of(2026, 10, 15).toEpochDay(),
+            ),
+        )
+        assertEquals(25.0, monthAvg(inst), 1e-9)
+        assertEquals(300.0, Billing.total(listOf(inst), SummaryPeriod.YEAR, r, "CNY", today), 1e-9)
+        // 周付 10 元，2026 年 52 个周五
+        assertEquals(520.0, Billing.total(listOf(sub(LocalDate.of(2026, 11, 27), unit = CycleUnit.WEEK, amount = 10.0)), SummaryPeriod.YEAR, r, "CNY", today), 1e-9)
+    }
+
+    @Test fun firstBillingDayStopsBackwardProjection() {
+        val r = RateTable(mapOf("CNY" to 1.0), 1)
+        val today = LocalDate.of(2026, 11, 22)
+        // 月付 30，下次 12 月 5 日；从 2026-09-05 才开始订：今年只有 9、10、11、12 月四期
+        val s = sub(LocalDate.of(2026, 12, 5)).copy(firstBillingDay = LocalDate.of(2026, 9, 5).toEpochDay())
+        assertEquals(120.0, Billing.total(listOf(s), SummaryPeriod.YEAR, r, "CNY", today), 1e-9)
+        assertEquals(10.0, Billing.total(listOf(s), SummaryPeriod.MONTH, r, "CNY", today), 1e-9)
+        assertEquals(emptyList<LocalDate>(), Billing.occurrences(s, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
+        assertEquals(listOf(LocalDate.of(2026, 9, 5)), Billing.occurrences(s, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
+        // 没填：一直往前推，今年 12 期
+        assertEquals(360.0, Billing.total(listOf(s.copy(firstBillingDay = null)), SummaryPeriod.YEAR, r, "CNY", today), 1e-9)
     }
 
     @Test fun periodCosts() {
