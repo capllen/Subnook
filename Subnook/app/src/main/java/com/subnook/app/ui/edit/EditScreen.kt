@@ -122,7 +122,7 @@ internal class Form {
     /** 选「其他」时填的名称（可以不填） */
     var payMethodNote by mutableStateOf("")
     var categoryNote by mutableStateOf("")
-    /** 起始账单日（只有订阅有），null = 用默认值（今年的第一个账单日） */
+    /** 起始账单日（只有订阅有），null = 用默认值（添加那一年的第一个账单日） */
     var first by mutableStateOf<LocalDate?>(null)
     /** 按当前填的周期和下次付款日算出的默认起始账单日 */
     fun defaultFirst(): LocalDate =

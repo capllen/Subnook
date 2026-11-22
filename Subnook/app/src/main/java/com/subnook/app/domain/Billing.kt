@@ -34,11 +34,16 @@ object Billing {
     fun prev(sub: Subscription, from: LocalDate): LocalDate =
         shift(from, sub.cycleCount, sub.cycleUnit, sub.anchorDay, -1)
 
+    /** 添加这个订阅的那一年 */
+    fun createdYear(sub: Subscription): Int =
+        java.time.Instant.ofEpochMilli(sub.createdAt).atZone(java.time.ZoneId.systemDefault()).year
+
     /**
-     * 起始账单日没填时的默认值：今年的第一个账单日（从下次付款日按周期往前推，不早于今年 1 月 1 日）。
-     * 下次付款日本身在今年之前（很久没付）就用下次付款日。
+     * 起始账单日没填时的默认值：添加这个订阅那一年的第一个账单日（从下次付款日按周期往前推，不早于那年 1 月 1 日）。
+     * 用添加的年份而不是今年，到了新的一年默认值也不会变，往年的账单照样推算得出来。
+     * 下次付款日本身在那年之前就用下次付款日。
      */
-    fun defaultFirstBillingDay(sub: Subscription, year: Int = today().year): LocalDate {
+    fun defaultFirstBillingDay(sub: Subscription, year: Int = createdYear(sub)): LocalDate {
         val jan1 = LocalDate.of(year, 1, 1)
         var d = LocalDate.ofEpochDay(sub.nextBillingDay)
         var guard = 0
@@ -88,7 +93,7 @@ object Billing {
         )
     }
 
-    /** 订阅实际用的起始账单日：填了用填的，没填用今年的第一个账单日 */
+    /** 订阅实际用的起始账单日：填了用填的，没填用添加那一年的第一个账单日 */
     fun firstBillingDate(sub: Subscription): LocalDate =
         sub.firstBillingDay?.let(LocalDate::ofEpochDay) ?: defaultFirstBillingDay(sub)
 
@@ -103,7 +108,7 @@ object Billing {
             to = minOf(to, Installments.endDate(sub))
             if (from > to) return emptyList()
         } else {
-            // 订阅不会早于起始账单日（没填就是今年的第一个账单日）
+            // 订阅不会早于起始账单日（没填就是添加那一年的第一个账单日）
             from = maxOf(from, firstBillingDate(sub))
             if (from > to) return emptyList()
         }

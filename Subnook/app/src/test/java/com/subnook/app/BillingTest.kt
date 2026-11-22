@@ -63,7 +63,24 @@ class BillingTest {
     }
     private fun sub(next: LocalDate, count: Int = 1, unit: CycleUnit = CycleUnit.MONTH, amount: Double = 30.0, cur: String = "CNY") =
         Subscription(name = "t", amount = amount, currency = cur, cycleCount = count, cycleUnit = unit,
-            nextBillingDay = next.toEpochDay(), anchorDay = next.dayOfMonth)
+            nextBillingDay = next.toEpochDay(), anchorDay = next.dayOfMonth, createdAt = createdIn(2026))
+
+    /** 测试里固定「添加订阅的时间」（默认起始账单日按添加那年算） */
+    private fun createdIn(year: Int) = LocalDate.of(year, 6, 1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    @Test fun defaultFirstBillingDayStaysInTheYearAdded() {
+        // 2026 年添加、每月 5 号：默认起始账单日是 2026-01-05；到了 2027 年也不变，2026 年的账单照样推算得出来
+        val s = sub(LocalDate.of(2027, 2, 5))
+        Billing.todayOverride = LocalDate.of(2027, 1, 20)
+        assertEquals(LocalDate.of(2026, 1, 5), Billing.defaultFirstBillingDay(s))
+        assertEquals(30.0, Billing.scheduledCost(s, LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 31)), 1e-9)
+        // 2025 年添加的：从 2025 年第一期算起
+        assertEquals(LocalDate.of(2025, 1, 5), Billing.defaultFirstBillingDay(s.copy(createdAt = createdIn(2025))))
+        // 2027 年才添加的：从 2027 年第一期算起，2026 年没有
+        val new27 = s.copy(createdAt = createdIn(2027))
+        assertEquals(LocalDate.of(2027, 1, 5), Billing.defaultFirstBillingDay(new27))
+        assertEquals(0.0, Billing.scheduledCost(new27, LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 31)), 1e-9)
+    }
 
     @Test fun monthEndAnchorDoesNotDrift() {
         val s = sub(LocalDate.of(2026, 1, 31))
