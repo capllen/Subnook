@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +78,9 @@ private val ChartColors = listOf(
     Color(0xFF64748B), Color(0xFFA855F7), Color(0xFFEAB308), Color(0xFF0EA5E9),
 )
 
+/** 柱状图往前显示几个月 */
+private const val PAST_MONTHS = 12
+
 private data class Slice(val label: String, val value: Double, val color: Color, val count: Int)
 
 @Composable
@@ -90,8 +94,9 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
     // 紫色卡片的大数字是平均数；下面默认按「未来一年」实际待付，点柱状图某个月就只看那个月（整月按账单计划），点空白处回到未来一年
     val today = LocalDate.now()
     val end = Billing.yearEnd(today)
-    // 每月柱状图：本月起 12 个自然月，每个月都按账单计划算整月（本月 1 号到今天的账单、装 App 之前的也算），和首页「本月」小计一致
-    val months = (0 until 12).map { YearMonth.from(today).plusMonths(it.toLong()) }
+    // 每月柱状图：前 12 个月 + 本月起 12 个月，可以左右滑；每个月都按账单计划算整月
+    // （本月 1 号到今天的账单、装 App 之前的也算，不早于起始账单日），和首页「本月」小计一致
+    val months = (-PAST_MONTHS until 12).map { YearMonth.from(today).plusMonths(it.toLong()) }
     val ranges = months.map { ym -> ym.atDay(1) to ym.atEndOfMonth() }
     val perMonth = ranges.map { (f, t) -> active.sumOf { st.rates.convert(Billing.scheduledCost(it, f, t), it.currency, cur) } }
     var selMonth by remember { mutableStateOf<YearMonth?>(null) }
@@ -159,7 +164,7 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
                             style = MaterialTheme.typography.headlineSmall.merge(TabularNums),
                         )
                         Spacer(Modifier.height(14.dp))
-                        MonthBars(months, perMonth, selIdx) { i -> selMonth = if (i == selIdx) null else months[i] }
+                        MonthBars(months, perMonth, PAST_MONTHS, selIdx) { i -> selMonth = if (i == selIdx) null else months[i] }
                     }
                 }
             }
@@ -167,7 +172,7 @@ fun StatsScreen(vm: MainViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
             if (inScope.isEmpty()) {
                 item {
                     SoftCard(Modifier.fillMaxWidth()) {
-                        Text("${scope}没有待付账单", Modifier.padding(24.dp), color = cs.onSurfaceVariant)
+                        Text("${scope}没有账单", Modifier.padding(24.dp), color = cs.onSurfaceVariant)
                     }
                 }
             } else {
@@ -344,7 +349,7 @@ private fun PeriodTiles(st: UiState, onCurrency: () -> Unit) {
         Column {
             // 大数字是每月平均（和首页紫色卡片一样）；下面一排是实际待付：未来7天 / 未来30天 / 未来一年。币种在右上角切换（与首页紫色卡片一致），金额里不再带代码
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("每月平均支出", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.75f))
+                Text("当年每月平均支出", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.75f))
                 Spacer(Modifier.weight(1f))
                 Row(
                     Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.16f)).clickable(onClick = onCurrency)
@@ -475,40 +480,63 @@ private fun StackBar(parts: List<Slice>) {
     }
 }
 
-/** 每月柱状图：点某个月选中（下面的统计跟着只看这个月），再点一次取消；柱子上方的空白交给外面（取消选中） */
+/**
+ * 每月柱状图：一屏显示 12 个月，可以左右滑（前面是过去的月份）。点某个月选中（下面的统计跟着只看这个月），
+ * 再点一次取消；柱子上方的空白交给外面（取消选中）。打开时本月大约在左边五分之一的位置。
+ */
 @Composable
-private fun MonthBars(months: List<YearMonth>, values: List<Double>, selected: Int?, onSelect: (Int) -> Unit) {
+private fun MonthBars(months: List<YearMonth>, values: List<Double>, currentIndex: Int, selected: Int?, onSelect: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val extra = LocalExtra.current
     val max = values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
-    Row(Modifier.fillMaxWidth().height(112.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        values.forEachIndexed { i, v ->
-            val frac = (v / max).toFloat().coerceAtLeast(0.03f)
-            val on = i == selected
-            val pick = Modifier.clickable(interactionSource = null, indication = null) { onSelect(i) }
-            Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-                    // 可点范围至少占三分之一高度，矮柱子也好点；再往上才算空白
-                    Box(Modifier.fillMaxWidth().fillMaxHeight(maxOf(frac, 0.34f)).then(pick), contentAlignment = Alignment.BottomCenter) {
-                        Box(
-                            Modifier.fillMaxWidth().fillMaxHeight(frac / maxOf(frac, 0.34f))
-                                .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                                .then(
-                                    when {
-                                        on -> Modifier.background(extra.accentBrush)
-                                        selected == null -> Modifier.background(cs.primary.copy(alpha = 0.45f))
-                                        else -> Modifier.background(cs.primary.copy(alpha = 0.18f))
-                                    },
-                                ),
-                        )
+    val gap = 5.dp
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val barW = (maxWidth - gap * 11) / 12
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val barPx = with(density) { barW.toPx() }
+        val stepPx = barPx + with(density) { gap.toPx() }
+        val widthPx = with(density) { maxWidth.toPx() }
+        // 本月柱子的中心对准左边五分之一处
+        val initial = (currentIndex * stepPx + barPx / 2 - widthPx / 5).toInt().coerceAtLeast(0)
+        val scroll = androidx.compose.foundation.rememberScrollState(initial)
+        Row(
+            Modifier.fillMaxWidth().height(112.dp).horizontalScroll(scroll),
+            horizontalArrangement = Arrangement.spacedBy(gap),
+        ) {
+            values.forEachIndexed { i, v ->
+                val frac = (v / max).toFloat().coerceAtLeast(0.03f)
+                val on = i == selected
+                val pick = Modifier.clickable(interactionSource = null, indication = null) { onSelect(i) }
+                Column(Modifier.width(barW).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+                        // 可点范围至少占三分之一高度，矮柱子也好点；再往上才算空白
+                        Box(Modifier.fillMaxWidth().fillMaxHeight(maxOf(frac, 0.34f)).then(pick), contentAlignment = Alignment.BottomCenter) {
+                            Box(
+                                Modifier.fillMaxWidth().fillMaxHeight(frac / maxOf(frac, 0.34f))
+                                    .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                                    .then(
+                                        when {
+                                            on -> Modifier.background(extra.accentBrush)
+                                            selected == null -> Modifier.background(cs.primary.copy(alpha = if (i < currentIndex) 0.28f else 0.45f))
+                                            else -> Modifier.background(cs.primary.copy(alpha = 0.18f))
+                                        },
+                                    ),
+                            )
+                        }
                     }
+                    // 柱子太窄放不下年份，选中后标题里有年份
+                    Text(
+                        "${months[i].monthValue}",
+                        pick.fillMaxWidth().padding(top = 6.dp), textAlign = TextAlign.Center, maxLines = 1,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = when {
+                            on -> cs.primary
+                            i == currentIndex -> cs.onSurface
+                            else -> cs.onSurfaceVariant
+                        },
+                        fontWeight = if (on || i == currentIndex) FontWeight.Bold else null,
+                    )
                 }
-                Text(
-                    "${months[i].monthValue}", pick.fillMaxWidth().padding(top = 6.dp), textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                    color = if (on) cs.primary else cs.onSurfaceVariant,
-                    fontWeight = if (on) FontWeight.Bold else null,
-                )
             }
         }
     }

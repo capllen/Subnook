@@ -610,7 +610,7 @@ private fun HeroCard(st: UiState, onPeriod: (SummaryPeriod) -> Unit, onCurrency:
         Column(Modifier.padding(22.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 按年时就是今年应付合计，不是平均数
-                Text(if (period == SummaryPeriod.YEAR) "当年支出" else "${period.unitLabel}平均支出", style = MaterialTheme.typography.labelLarge, color = white.copy(alpha = 0.78f))
+                Text(if (period == SummaryPeriod.YEAR) "当年支出" else "当年${period.unitLabel}平均支出", style = MaterialTheme.typography.labelLarge, color = white.copy(alpha = 0.78f))
                 Spacer(Modifier.weight(1f))
                 Row(
                     Modifier.clip(CircleShape).background(white.copy(alpha = 0.16f)).clickable(onClick = onCurrency)
